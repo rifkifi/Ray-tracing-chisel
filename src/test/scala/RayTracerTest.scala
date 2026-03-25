@@ -462,16 +462,22 @@ class SoftwareSimulationTest extends AnyFlatSpec {
   "Software simulation" should "generate ASCII art" in {
     val width = 80
     val height = 40
-    
+    val x1 = 0.1 
+    val y1 = -0.1
+    val z1 = 0.5 
+    val rad1 = 0.2 
+    val specular = 0.01
     println("=" * 80)
     println("Software Simulation - ASCII Art Generation")
+    println(" Following stats are")
+    println("For sphere1: "+x1+" "+y1+" "+z1+" "+rad1+" "+specular)
     println("=" * 80)
     println()
     
     val spheres = Seq(
-      SphereModel(0.0, -0.5, -1.0, 0.8, 1.0),
-      SphereModel(1.2, -0.2, -2.0, 0.6, 0.7),
-      SphereModel(-1.2, -0.1, -0.5, 0.5, 0.6)
+      SphereModel(x1, y1, z1, rad1, specular), //was 0.75
+/*       SphereModel(1.2, -0.2, -2.0, 0.6, 0.7),
+      SphereModel(-1.2, -0.1, -0.5, 0.5, 0.6) */
     )
     val lights = Seq(
       LightModel(0.0, 5.0, 5.0, 0.5)
