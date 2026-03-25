@@ -1,0 +1,5 @@
+[0m[[0m[31merror[0m] [0m[0m/mnt/c/Users/Rifki/Personal/CollegeWorkspace/ChipDesign/Project/raytrace/src/test/scala/RayTracerTest.scala:93:9: value SphereModel is not a member of SphereModel[0m
+[0m[[0m[31merror[0m] [0m[0mpossible cause: maybe a semicolon is missing before `value SphereModel`?[0m
+[0m[[0m[31merror[0m] [0m[0m        SphereModel(1.2, -0.2, -4.0, 0.6, 0.7),[0m
+[0m[[0m[31merror[0m] [0m[0m        ^[0m
+[0m[[0m[31merror[0m] [0m[0mone error found[0m
