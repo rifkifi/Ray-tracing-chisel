@@ -67,7 +67,7 @@ object RayTracerTestSupport {
 
 object SoftwareRayTracerModel {
   final case class Vec3(x: Double, y: Double, z: Double) {
-    def +(that: Vec3): Vec3 = Vec3(x + that.x, y + that.y, z + that.z)
+    def +(that: Vec3): Vec3 = Vec3(x + that.x, y + that.y, z + that.z) //we point twice?
     def -(that: Vec3): Vec3 = Vec3(x - that.x, y - that.y, z - that.z)
     def *(scalar: Double): Vec3 = Vec3(x * scalar, y * scalar, z * scalar)
     def dot(that: Vec3): Double = x * that.x + y * that.y + z * that.z
@@ -86,7 +86,7 @@ object SoftwareRayTracerModel {
     if (len > 0.0) Vec3(v.x / len, v.y / len, v.z / len) else v
   }
 
-  private def cross(a: Vec3, b: Vec3): Vec3 =
+  private def cross(a: Vec3, b: Vec3): Vec3 = //dot product 
     Vec3(
       a.y * b.z - a.z * b.y,
       a.z * b.x - a.x * b.z,
@@ -94,7 +94,7 @@ object SoftwareRayTracerModel {
     )
 
   private def reflect(lightDir: Vec3, normal: Vec3): Vec3 = {
-    val scale = 2.0 * normal.dot(lightDir)
+    val scale = 2.0 * normal.dot(lightDir) //
     normalize((normal * scale) - lightDir)
   }
 
@@ -225,7 +225,7 @@ object SoftwareRayTracerModel {
 // Test for the AsciiRayTracer module
 class AsciiRayTracerTest extends AnyFlatSpec with ChiselScalatestTester {
   
-  "AsciiRayTracer" should "render a simple frame" in {
+  "AsciiRayTracer" should "render a simple frame RUBBERDUCK" in {
     test(new AsciiRayTracer(80, 40, 3, 1, 16)) { dut =>
       RayTracerTestSupport.configureClockTimeout(dut, width = 80, height = 40, maxSpheres = 1, maxLights = 1)
       print("\u001b[2J\u001b[H")  // Clear screen
@@ -247,14 +247,14 @@ class AsciiRayTracerTest extends AnyFlatSpec with ChiselScalatestTester {
       
       val spheres = Seq(
         SphereModel(0.0, -0.5, -1.0, 0.8, 1),
-        SphereModel(1.2, -0.2, -2.0, 0.6, 0.7),
+        SphereModel(10, -0.2, -2.0, 0.6, 0.7), //changed to 10
         SphereModel(-1.2, -0.1, -0.5, 0.5, 0.6),
         // SphereModel(0.0, -100.5, -3.0, 100.0, 0.1)
       )
       val lights = Seq(
         // LightModel(2.0, 2.0, -2.0, 0.7),
         // LightModel(-2.0, 3.0, -3.0, 0.5),
-        LightModel(0.0, 5.0, 5, 0.5)
+        LightModel(1, 5.0, 5, 0.5) //changed from 0 to 1
       )
       TestSceneDriver.drive(dut, spheres, lights)
       
@@ -455,7 +455,7 @@ class PerformanceAsciiRayTracerTest extends AnyFlatSpec with ChiselScalatestTest
     }
   }
 }
-
+// this will run it sbt "testOnly *SoftwareSimulationTest"
 // Software simulation test (doesn't require hardware)
 class SoftwareSimulationTest extends AnyFlatSpec {
   
@@ -503,7 +503,7 @@ class SoftwareSimulationTest extends AnyFlatSpec {
 }
 
 // Main test runner
-object RunAsciiRayTracerTests {
+object RunAsciiRayTracerTests { //to run, write: sbt "Test / runMain RunAsciiRayTracerTests" 
   def main(args: Array[String]): Unit = {
     println("\n" + "=" * 80)
     println("ASCII Ray Tracer Test Suite")
@@ -518,8 +518,10 @@ object RunAsciiRayTracerTests {
     println("5. Run All Tests")
     
     print("\nEnter choice (1-5): ")
-    val choice = scala.io.StdIn.readLine().toInt
-    
+    val choice = if (args.nonEmpty) args(0).toInt  //use command line arguments instead 
+      else 1
+
+
     choice match {
       case 1 =>
         println("\nRunning Software Simulation...\n")
