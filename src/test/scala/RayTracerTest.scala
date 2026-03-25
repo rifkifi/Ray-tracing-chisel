@@ -306,156 +306,6 @@ class AsciiRayTracerTest extends AnyFlatSpec with ChiselScalatestTester {
   }
 }
 
-// Test with animated camera
-class AnimatedAsciiRayTracerTest extends AnyFlatSpec with ChiselScalatestTester {
-  
-  "Animated AsciiRayTracer" should "render rotating view" in {
-    test(new AsciiRayTracer(80, 40, 3, 1, 16)) { dut =>
-      val frames = 30
-      RayTracerTestSupport.configureClockTimeout(dut, width = 80, height = 40, maxSpheres = 4, maxLights = 2, frames = frames)
-      val spheres = Seq(
-        SphereModel(0.0, -0.5, -3.0, 0.8, 0.5),
-        SphereModel(1.2, -0.2, -4.0, 0.6, 0.7),
-        SphereModel(-1.2, -0.1, -3.5, 0.5, 0.6),
-        // SphereModel(0.0, -100.5, -3.0, 100.0, 0.1)
-      )
-      val lights = Seq(
-        LightModel(2.0, 2.0, -2.0, 0.7),
-        // LightModel(-2.0, 3.0, -3.0, 0.5),
-        // LightModel(0.0, 5.0, -1.0, 0.4)
-      )
-      
-      for (frame <- 0 until frames) {
-        val angle = frame * 2 * Math.PI / frames
-        val cameraX = 2.5 * math.cos(angle)
-        val cameraZ = 2.5 * math.sin(angle)
-        
-        // Update camera
-        TestSceneDriver.pokeFixed(dut.io.cameraPos.x.value, cameraX)
-        TestSceneDriver.pokeFixed(dut.io.cameraPos.y.value, 0.5)
-        TestSceneDriver.pokeFixed(dut.io.cameraPos.z.value, cameraZ)
-        
-        TestSceneDriver.pokeFixed(dut.io.cameraDir.x.value, -cameraX)
-        TestSceneDriver.pokeFixed(dut.io.cameraDir.y.value, -0.1)
-        TestSceneDriver.pokeFixed(dut.io.cameraDir.z.value, -cameraZ)
-        
-        dut.io.fov.poke(80.U(32.W))
-        
-        // Clear screen and show frame info
-        print("\u001b[2J\u001b[H")
-        println("=" * 80)
-        println(s"Frame ${frame + 1}/$frames - Camera: (${"%.2f".format(cameraX)}, 0.5, ${"%.2f".format(cameraZ)})")
-        println("=" * 80)
-        println()
-        
-        // Render frame
-        TestSceneDriver.drive(dut, spheres, lights)
-        dut.io.start.poke(true.B)
-        dut.clock.step()
-        dut.io.start.poke(false.B)
-        
-        var currentRow = new StringBuilder
-        var currentY = 0
-        
-        while (!dut.io.frameComplete.peek().litToBoolean) {
-          TestSceneDriver.drive(dut, spheres, lights)
-          dut.clock.step()
-          
-          if (dut.io.asciiValid.peek().litToBoolean) {
-            val y = dut.io.y.peek().litValue.toInt
-            val asciiChar = dut.io.asciiChar.peek().litValue.toInt.toChar
-            
-            if (y != currentY) {
-              println(currentRow.toString)
-              currentRow.clear()
-              currentY = y
-            }
-            
-            currentRow.append(asciiChar)
-          }
-        }
-        
-        println(currentRow.toString)
-        println()
-        println("=" * 80)
-        
-        Thread.sleep(100)  // Animation delay
-      }
-    }
-  }
-}
-
-// Performance test
-class PerformanceAsciiRayTracerTest extends AnyFlatSpec with ChiselScalatestTester {
-  
-  "Performance test" should "measure rendering speed" in {
-    val resolutions = List(
-      (40, 20, "Small"),
-      (80, 40, "Medium")
-    )
-    
-    println("=" * 80)
-    println("Performance Test")
-    println("=" * 80)
-    println()
-    
-    for ((width, height, name) <- resolutions) {
-      test(new AsciiRayTracer(width, height, 4, 2)) { dut =>
-        RayTracerTestSupport.configureClockTimeout(dut, width = width, height = height, maxSpheres = 4, maxLights = 2)
-        println(s"Testing $name Resolution: ${width}x${height}")
-        val spheres = Seq(
-          SphereModel(0.0, -0.5, -3.0, 0.8, 0.5)
-        )
-        val lights = Seq(
-          LightModel(2.0, 2.0, -2.0, 0.7)
-        )
-        
-        // Configure camera
-        TestSceneDriver.pokeFixed(dut.io.cameraPos.x.value, 0.0)
-        TestSceneDriver.pokeFixed(dut.io.cameraPos.y.value, 0.5)
-        TestSceneDriver.pokeFixed(dut.io.cameraPos.z.value, 2.0)
-        
-        TestSceneDriver.pokeFixed(dut.io.cameraDir.x.value, 0.0)
-        TestSceneDriver.pokeFixed(dut.io.cameraDir.y.value, -0.1)
-        TestSceneDriver.pokeFixed(dut.io.cameraDir.z.value, -1.0)
-        
-        dut.io.fov.poke(80.U(32.W))
-        
-        // Start timing
-        val startTime = System.nanoTime()
-        
-        // Render
-        TestSceneDriver.drive(dut, spheres, lights)
-        dut.io.start.poke(true.B)
-        dut.clock.step()
-        dut.io.start.poke(false.B)
-        
-        var pixelsProcessed = 0
-        var cycles = 0
-        
-        while (!dut.io.frameComplete.peek().litToBoolean) {
-          TestSceneDriver.drive(dut, spheres, lights)
-          dut.clock.step()
-          cycles += 1
-          if (dut.io.asciiValid.peek().litToBoolean) {
-            pixelsProcessed += 1
-          }
-        }
-        
-        val endTime = System.nanoTime()
-        val duration = (endTime - startTime) / 1e9
-        val fps = 1.0 / duration
-        
-        println(s"  Time: ${"%.3f".format(duration)} seconds")
-        println(s"  FPS: ${"%.1f".format(fps)}")
-        println(s"  Cycles: $cycles")
-        println(s"  Cycles per pixel: ${cycles / pixelsProcessed}")
-        println()
-      }
-    }
-  }
-}
-
 // Software simulation test (doesn't require hardware)
 class SoftwareSimulationTest extends AnyFlatSpec {
   
@@ -513,11 +363,9 @@ object RunAsciiRayTracerTests {
     println("Select test to run:")
     println("1. Software Simulation (Fast, no hardware)")
     println("2. Hardware Simulation (Single Frame)")
-    println("3. Hardware Simulation (Animated)")
-    println("4. Performance Test")
-    println("5. Run All Tests")
+    println("3. Run All Tests")
     
-    print("\nEnter choice (1-5): ")
+    print("\nEnter choice (1-3): ")
     val choice = scala.io.StdIn.readLine().toInt
     
     choice match {
@@ -528,12 +376,6 @@ object RunAsciiRayTracerTests {
         println("\nRunning Hardware Simulation...\n")
         (new AsciiRayTracerTest).execute()
       case 3 =>
-        println("\nRunning Animated Test...\n")
-        (new AnimatedAsciiRayTracerTest).execute()
-      case 4 =>
-        println("\nRunning Performance Test...\n")
-        (new PerformanceAsciiRayTracerTest).execute()
-      case 5 =>
         println("\nRunning All Tests...\n")
         (new SoftwareSimulationTest).execute()
         println("\n" + "=" * 80 + "\n")

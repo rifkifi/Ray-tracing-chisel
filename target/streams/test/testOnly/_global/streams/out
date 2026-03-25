@@ -1,0 +1,7 @@
+[0m[[0m[0mdebug[0m] [0m[0mjavaOptions: Vector()[0m
+[0m[[0m[0mdebug[0m] [0m[0mForking tests - parallelism = false[0m
+[0m[[0m[0mdebug[0m] [0m[0mCreate a single-thread test executor[0m
+[0m[[0m[0mdebug[0m] [0m[0mRunner for org.scalatest.tools.Framework produced 1 initial tasks for 1 tests.[0m
+[0m[[0m[0mdebug[0m] [0m[0m  Running TaskDef(AsciiRayTracerTest, sbt.ForkMain$SubclassFingerscan@26f67b76, false, [SuiteSelector])[0m
+[0m[[0m[0minfo[0m] [0m[0m[32mAsciiRayTracerTest:[0m[0m
+[0m[[0m[0minfo[0m] [0m[0m[32mAsciiRayTracer[0m[0m
