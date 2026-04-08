@@ -1,6 +1,5 @@
 import chisel3._
 import chisel3.util._
-import chisel3.experimental.BundleLiterals._
 
 //=============================================================================
 // Ray Tracing Types
@@ -20,14 +19,6 @@ class Sphere(val bitWidth: Int = 32, val fracBits: Int = 16) extends Bundle { //
 class Light(val bitWidth: Int = 32, val fracBits: Int = 16) extends Bundle { // Point light source definition.
   val position = new Vector3(bitWidth, fracBits) // Light position in world space.
   val intensity = new Fixed(bitWidth, fracBits) // Light intensity multiplier.
-}
-
-class Intersection(val bitWidth: Int = 32, val fracBits: Int = 16) extends Bundle { // Intersection result container.
-  val hit = Bool() // True when a ray intersects an object.
-  val t = new Fixed(bitWidth, fracBits) // Distance along the ray to the hit.
-  val objectId = UInt(8.W) // Identifier of the intersected object.
-  val hitPoint = new Vector3(bitWidth, fracBits) // World-space hit position.
-  val normal = new Vector3(bitWidth, fracBits) // Surface normal at the hit point.
 }
 
 //=============================================================================
@@ -111,6 +102,7 @@ class AsciiRayTracer(
   val hitPoint = RegInit(0.U.asTypeOf(new Vector3(FP_WIDTH, FP_FRAC))) // Surface point hit by the primary ray.
   val hitNormal = RegInit(0.U.asTypeOf(new Vector3(FP_WIDTH, FP_FRAC))) // Surface normal at the hit point.
   val activeLightDir = RegInit(0.U.asTypeOf(new Vector3(FP_WIDTH, FP_FRAC))) // Direction from the hit point to the active light.
+  val activeLightDistance = RegInit(Fixed.zero(FP_WIDTH, FP_FRAC)) // Max-norm distance from the hit point to the active light.
   
   def cross(a: Vector3, b: Vector3): Vector3 = { // Computes the vector cross product.
     val res = Wire(new Vector3(FP_WIDTH, FP_FRAC)) // Output wire for the cross-product result.
@@ -120,7 +112,7 @@ class AsciiRayTracer(
     res
   }
   
-  def intersectSphere(ray: Ray, sphere: Sphere): (Bool, Fixed) = { // Computes whether a ray hits a sphere and returns the nearest positive distance.
+  def intersectSphere(ray: Ray, sphere: Sphere, minT: Fixed = ZERO, maxT: Fixed = INFINITY_VAL): (Bool, Fixed) = { // Computes whether a ray hits a sphere within the requested distance interval.
     val oc = ray.origin - sphere.center // Vector from sphere center to ray origin.
     val a = ray.dir.dot(ray.dir) // Quadratic coefficient a.
     val b = (oc.dot(ray.dir)) * TWO // Quadratic coefficient b.
@@ -136,10 +128,10 @@ class AsciiRayTracer(
       val t1 = (-b - sqrtDisc) / (TWO * a) // Near intersection candidate.
       val t2 = (-b + sqrtDisc) / (TWO * a) // Far intersection candidate.
       
-      when(t1 > ZERO) {
+      when(t1 > minT && t1 < maxT) {
         hit := true.B
         t := t1
-      }.elsewhen(t2 > ZERO) {
+      }.elsewhen(t2 > minT && t2 < maxT) {
         hit := true.B
         t := t2
       }.otherwise {
@@ -248,7 +240,7 @@ class AsciiRayTracer(
     is(State.intersect) {
       when(!allTested) {
         val sphere = io.sphereData // Sphere currently fetched from external storage.
-        val (hit, t) = intersectSphere(currentRay, sphere) // Intersection result for the current sphere.
+        val (hit, t) = intersectSphere(currentRay, sphere, ZERO, closestT) // Intersection result for the current sphere.
         
         when(hit && t.value < closestT.value && t.value > ZERO.value) {
           // printf(p"Hit sphere ${sphereIdx} at t=${t}\n")
@@ -282,11 +274,13 @@ class AsciiRayTracer(
     is(State.lighting) {
       when(lightIdx < maxLights.U) {
         val light = io.lightData // Light currently fetched from external storage.
-        val lightDir = (light.position - hitPoint).normalize() // Direction from the hit point to the light.
+        val lightVector = light.position - hitPoint // Vector from the hit point to the light.
+        val lightDir = lightVector.normalize() // Direction from the hit point to the light.
         
         shadowRay.origin := hitPoint + (hitNormal * EPSILON)
         shadowRay.dir := lightDir
         activeLightDir := lightDir
+        activeLightDistance := lightVector.maxNorm()
         shadowSphereIdx := 0.U
         inShadow := false.B
         state := State.shadowIntersect
@@ -299,8 +293,8 @@ class AsciiRayTracer(
     // Check whether any sphere blocks the current light from reaching the hit point.
     is(State.shadowIntersect) {
       val sphere = io.sphereData // Sphere currently being tested against the shadow ray.
-      val (shadowHit, shadowT) = intersectSphere(shadowRay, sphere) // Shadow-ray intersection result.
-      val blocksLight = (shadowSphereIdx =/= closestObj) && shadowHit && (shadowT > EPSILON) // True when another sphere occludes the light.
+      val (shadowHit, _) = intersectSphere(shadowRay, sphere, EPSILON, activeLightDistance) // Shadow-ray intersection result.
+      val blocksLight = (shadowSphereIdx =/= closestObj) && shadowHit // True when another sphere occludes the light.
       
       when(blocksLight) {
         inShadow := true.B
@@ -324,7 +318,7 @@ class AsciiRayTracer(
         val viewDir = (currentRay.origin - hitPoint).normalize() // Direction from the hit point back to the camera.
         val reflectDir = reflect(activeLightDir, hitNormal) // Reflected light direction about the surface normal.
         val specBase = maxFixed(viewDir.dot(reflectDir), ZERO) // Clamped specular base term.
-        val specularPower = powFixed(specBase, 30) // Sharpened specular highlight term.
+        val specularPower = powFixed(specBase, 4) // Sharpened specular highlight term.
         val specularContribution = light.intensity * specularPower * closestSpecular // Specular lighting contribution.
         val nextIntensity = totalIntensity + diffuseContribution + specularContribution // Updated accumulated intensity.
         
@@ -372,7 +366,7 @@ object EmitAsciiRayTracer extends App { // Standalone generator entry point.
   println("Generating SystemVerilog for AsciiRayTracer...")
 
   emitVerilog(
-    new AsciiRayTracer(80, 40, 8, 4),
+    new AsciiRayTracer(80, 40, 1, 1, 16),
     Array(
       "--target-dir",
       "generated"
