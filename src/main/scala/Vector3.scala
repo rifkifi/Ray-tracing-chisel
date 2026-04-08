@@ -49,18 +49,37 @@ class Vector3(val bitWidth: Int = 32, val fracBits: Int = 16) extends Bundle { /
   }
   
   def lengthSq: Fixed = dot(this) // Squared vector length.
+
+  def maxNorm(): Fixed = maxComponentAbs() // Largest absolute component magnitude.
+
+  def length(): Fixed = sqrt(lengthSq) // Euclidean vector length.
   
-  def normalize(): Vector3 = { // Returns a normalized version of the vector.
-    val len = sqrt(lengthSq) // Magnitude estimate used for normalization.
+  def normalize(): Vector3 = { // Returns the vector scaled by its largest-magnitude component.
+    val scale = maxNorm() // Dominant component magnitude used for max-component normalization.
     val res = Wire(new Vector3(bitWidth, fracBits)) // Output wire for the normalized vector.
-    when(len.value > 0.U) {
-      res.x := this.x / len
-      res.y := this.y / len
-      res.z := this.z / len
+    when(scale.value > 0.U) {
+      res.x := this.x / scale
+      res.y := this.y / scale
+      res.z := this.z / scale
     }.otherwise {
       res := this
     }
     res
+  }
+
+  private def absFixed(value: Fixed): Fixed = { // Returns the absolute value of a fixed-point number.
+    val res = Wire(new Fixed(bitWidth, fracBits))
+    res.value := Mux(value.value.asSInt < 0.S, (-value.value.asSInt).asUInt, value.value)
+    res
+  }
+
+  private def maxFixed(a: Fixed, b: Fixed): Fixed = Mux(a > b, a, b) // Returns the larger of two fixed-point values.
+
+  private def maxComponentAbs(): Fixed = { // Returns the largest absolute component magnitude.
+    val absX = absFixed(this.x)
+    val absY = absFixed(this.y)
+    val absZ = absFixed(this.z)
+    maxFixed(absX, maxFixed(absY, absZ))
   }
   
   private def sqrt(x: Fixed): Fixed = { // Approximates square root with Newton-Raphson iterations.

@@ -72,6 +72,7 @@ object SoftwareRayTracerModel {
     def *(scalar: Double): Vec3 = Vec3(x * scalar, y * scalar, z * scalar)
     def dot(that: Vec3): Double = x * that.x + y * that.y + z * that.z
     def lengthSq: Double = dot(this)
+    def maxNorm: Double = math.max(math.abs(x), math.max(math.abs(y), math.abs(z)))
   }
 
   private final case class Ray(origin: Vec3, dir: Vec3)
@@ -82,8 +83,8 @@ object SoftwareRayTracerModel {
   private val AsciiChars = " .,:;ox%#@"
 
   private def normalize(v: Vec3): Vec3 = {
-    val len = math.sqrt(v.lengthSq)
-    if (len > 0.0) Vec3(v.x / len, v.y / len, v.z / len) else v
+    val scale = v.maxNorm
+    if (scale > 0.0) Vec3(v.x / scale, v.y / scale, v.z / scale) else v
   }
 
   private def cross(a: Vec3, b: Vec3): Vec3 =
@@ -106,7 +107,7 @@ object SoftwareRayTracerModel {
     result
   }
 
-  private def intersectSphere(ray: Ray, sphere: SphereModel): Option[Double] = {
+  private def intersectSphere(ray: Ray, sphere: SphereModel, minT: Double = 0.0, maxT: Double = Double.PositiveInfinity): Option[Double] = {
     val center = Vec3(sphere.cx, sphere.cy, sphere.cz)
     val oc = ray.origin - center
     val a = ray.dir.dot(ray.dir)
@@ -118,8 +119,8 @@ object SoftwareRayTracerModel {
       val sqrtDisc = discriminant / 2.0
       val t1 = (-b - sqrtDisc) / (2.0 * a)
       val t2 = (-b + sqrtDisc) / (2.0 * a)
-      if (t1 > 0.0) Some(t1)
-      else if (t2 > 0.0) Some(t2)
+      if (minT < t1 && t1 < maxT) Some(t1)
+      else if (minT < t2 && t2 < maxT) Some(t2)
       else None
     } else {
       None
@@ -161,7 +162,7 @@ object SoftwareRayTracerModel {
         var closestSpecular = 0.0
 
         for ((sphere, idx) <- spheres.zipWithIndex) {
-          intersectSphere(ray, sphere).foreach { t =>
+          intersectSphere(ray, sphere, 0.0, closestT).foreach { t =>
             if (t < closestT && t > 0.0) {
               closestT = t
               closestObj = idx
@@ -179,15 +180,17 @@ object SoftwareRayTracerModel {
 
             for (light <- lights) {
               val lightPos = Vec3(light.px, light.py, light.pz)
-              val lightDir = normalize(lightPos - hitPoint)
+              val lightVector = lightPos - hitPoint
+              val lightDir = normalize(lightVector)
               val shadowRay = Ray(hitPoint + (hitNormal * Epsilon), lightDir)
+              val lightDistance = lightVector.maxNorm
 
               var inShadow = false
               var shadowSphereIdx = 0
               while (shadowSphereIdx < spheres.length && !inShadow) {
                 val blocksLight =
                   shadowSphereIdx != closestObj &&
-                    intersectSphere(shadowRay, spheres(shadowSphereIdx)).exists(_ > Epsilon)
+                    intersectSphere(shadowRay, spheres(shadowSphereIdx), Epsilon, lightDistance).nonEmpty
                 if (blocksLight) {
                   inShadow = true
                 }
@@ -297,7 +300,7 @@ class AsciiRayTracerTest extends AnyFlatSpec with ChiselScalatestTester {
       println(s"Rendering Complete! Total pixels: $totalPixels")
       println("=" * 80)
 
-      val filename = "hardware_raytrace.txt"
+      val filename = "hardware_raytrace2.txt"
       val writer = new PrintWriter(new File(filename))
       frameRows.foreach(writer.println)
       writer.close()
