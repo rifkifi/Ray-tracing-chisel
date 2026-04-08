@@ -457,6 +457,70 @@ class PerformanceAsciiRayTracerTest extends AnyFlatSpec with ChiselScalatestTest
 }
 // this will run it sbt "testOnly *SoftwareSimulationTest"
 // Software simulation test (doesn't require hardware)
+// NATURALLY THE DIMENSIONS WOULD BE DIFFERENT IF THE CAMERA IS DIRECTED DIFFERENTLY BUT GENERALLY Y is HEIGHT
+class DualSoftwareTest extends AnyFlatSpec { 
+  "DualTest" should "Generate" in {
+    val width = 80
+    val height = 40
+    val x1 = 0.5 
+    val y1 = -0.1
+    val z1 = 0.1
+    val rad1 = 0.1
+    val specular1 = 0.01
+    val x2 = 0.1 
+    val y2 = -0.1
+    val z2 = 0.1
+    val rad2= 0.1
+    val specular2 = 0.01
+  println("Ascii art generation, dual tests")
+  println("For Sphere1: "+x1+" "+y1+" "+z1+" "+rad1+" "+specular2+" & "+ "For Sphere2: "+x2+" "+y2+" "+z2+" "+rad2+" "+specular2)
+  val spheres1 = Seq{
+    SphereModel(x1,y1,z1,rad1,specular1) 
+  }
+  val spheres2 = Seq{
+    SphereModel(x2,y2,z2,rad2,specular2)
+  }
+  val lights = Seq(
+      LightModel(0.0, 5.0, 5.0, 0.5)
+    )
+  val frameRows1 = SoftwareRayTracerModel.renderFrame(
+      width = width,
+      height = height,
+      spheres = spheres1,
+      lights = lights,
+      cameraPos = SoftwareRayTracerModel.Vec3(0.0, 0.0, 2.0),
+      cameraDir = SoftwareRayTracerModel.Vec3(0.0, 0.0, -1.0),
+      fovDeg = 80.0
+    )
+    val frameRows2 = SoftwareRayTracerModel.renderFrame(
+      width = width,
+      height = height,
+      spheres = spheres2,
+      lights = lights,
+      cameraPos = SoftwareRayTracerModel.Vec3(0.0, 0.0, 2.0),
+      cameraDir = SoftwareRayTracerModel.Vec3(0.0, 0.0, -1.0),
+      fovDeg = 80.0
+    )
+      println("Printing for test1")
+      frameRows1.foreach(println)
+      println("/////////////////STARTING TEST2 ///////////////////////////// ")
+      println("Printing for test2")
+      frameRows2.foreach(println)
+
+      val filename1 = "SoftwareTest1"
+      val writer1 = new PrintWriter(new File(filename1)) 
+      frameRows1.foreach(writer1.println)
+      writer1.close()
+      println(s"Saving in file  $filename1") 
+      val filename2 = "SoftwareTest2"
+      val writer2 = new PrintWriter(new File(filename2))
+      frameRows2.foreach(writer2.println)
+      writer2.close()
+      println(s"Saving in file $filename2")
+  }
+
+}
+
 class SoftwareSimulationTest extends AnyFlatSpec {
   
   "Software simulation" should "generate ASCII art" in {
@@ -464,8 +528,8 @@ class SoftwareSimulationTest extends AnyFlatSpec {
     val height = 40
     val x1 = 0.1 
     val y1 = -0.1
-    val z1 = 0.5 
-    val rad1 = 0.2 
+    val z1 = 0.1
+    val rad1 = 0.1
     val specular = 0.01
     println("=" * 80)
     println("Software Simulation - ASCII Art Generation")
@@ -522,8 +586,9 @@ object RunAsciiRayTracerTests { //to run, write: sbt "Test / runMain RunAsciiRay
     println("3. Hardware Simulation (Animated)")
     println("4. Performance Test")
     println("5. Run All Tests")
+    println("6 Run dual software test")
     
-    print("\nEnter choice (1-5): ")
+    //print("\nEnter choice (1-5): ")
     val choice = if (args.nonEmpty) args(0).toInt  //use command line arguments instead 
       else 1
 
@@ -546,6 +611,9 @@ object RunAsciiRayTracerTests { //to run, write: sbt "Test / runMain RunAsciiRay
         (new SoftwareSimulationTest).execute()
         println("\n" + "=" * 80 + "\n")
         (new AsciiRayTracerTest).execute()
+      case 6 => 
+        println("\nRunning dual software Simulation...\n")
+        (new DualSoftwareTest).execute()
       case _ =>
         println("Invalid choice")
     }

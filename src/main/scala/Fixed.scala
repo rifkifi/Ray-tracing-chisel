@@ -5,7 +5,10 @@ import chisel3.experimental.BundleLiterals._
 //=============================================================================
 // Custom Fixed-Point Implementation
 //=============================================================================
-class Fixed(val bitWidth: Int, val fracBits: Int) extends Bundle {
+
+
+
+class Fixed(val bitWidth: Int, val fracBits: Int) extends Bundle { //So its storing floats in chisel, so fracbits(8), then 256 is 1.0 128 is 0.5. 
   val value = UInt(bitWidth.W)
 
   private def asSIntValue: SInt = value.asSInt
