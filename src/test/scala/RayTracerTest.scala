@@ -229,24 +229,13 @@ object SoftwareRayTracerModel {
 class AsciiRayTracerTest extends AnyFlatSpec with ChiselScalatestTester {
   
   "AsciiRayTracer" should "render a simple frame" in {
-    test(new AsciiRayTracer(80, 40, 3, 1, 16)) { dut =>
-      RayTracerTestSupport.configureClockTimeout(dut, width = 80, height = 40, maxSpheres = 1, maxLights = 1)
+    test(new AsciiRayTracer(3, 1)) { dut =>
+      RayTracerTestSupport.configureClockTimeout(dut, width = 80, height = 40, maxSpheres = 3, maxLights = 1)
       print("\u001b[2J\u001b[H")  // Clear screen
       println("=" * 80)
       println("ASCII Ray Tracer - Hardware Simulation")
       println("=" * 80)
       println()
-      
-      // Configure camera
-      TestSceneDriver.pokeFixed(dut.io.cameraPos.x.value, 0.0)
-      TestSceneDriver.pokeFixed(dut.io.cameraPos.y.value, 0.0)
-      TestSceneDriver.pokeFixed(dut.io.cameraPos.z.value, 2.0)
-      
-      TestSceneDriver.pokeFixed(dut.io.cameraDir.x.value, 0.0)
-      TestSceneDriver.pokeFixed(dut.io.cameraDir.y.value, 0.0)
-      TestSceneDriver.pokeFixed(dut.io.cameraDir.z.value, -1.0)
-      
-      dut.io.fov.poke(80.U(16.W))
       
       val spheres = Seq(
         SphereModel(0.0, -0.5, -1.0, 0.8, 1),
@@ -300,7 +289,7 @@ class AsciiRayTracerTest extends AnyFlatSpec with ChiselScalatestTester {
       println(s"Rendering Complete! Total pixels: $totalPixels")
       println("=" * 80)
 
-      val filename = "hardware_raytrace2.txt"
+      val filename = "output/hardware_raytrace2.txt"
       val writer = new PrintWriter(new File(filename))
       frameRows.foreach(writer.println)
       writer.close()
@@ -346,7 +335,7 @@ class SoftwareSimulationTest extends AnyFlatSpec {
     println("=" * 80)
     
     // Save to file
-    val filename = "software_raytrace.txt"
+    val filename = "output/software_raytrace.txt"
     val writer = new PrintWriter(new File(filename))
     frameRows.foreach(writer.println)
     writer.close()

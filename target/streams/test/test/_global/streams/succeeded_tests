@@ -1,4 +1,5 @@
 #Successful Tests
-#Wed Mar 25 16:54:06 CET 2026
-AsciiRayTracerTest=1774438301529
-SoftwareSimulationTest=1774454046588
+#Sun Apr 12 09:58:25 CEST 2026
+AsciiRayTracerTest=1775980705079
+SoftwareSimulationTest=1775643105145
+UartLoopbackTest=1775641976970

@@ -55,12 +55,12 @@ class Vector3(val bitWidth: Int = 32, val fracBits: Int = 16) extends Bundle { /
   def length(): Fixed = sqrt(lengthSq) // Euclidean vector length.
   
   def normalize(): Vector3 = { // Returns the vector scaled by its largest-magnitude component.
-    val scale = maxNorm() // Dominant component magnitude used for max-component normalization.
+    val scale = Fixed.one(bitWidth, fracBits) / maxNorm() // Dominant component magnitude used for max-component normalization.
     val res = Wire(new Vector3(bitWidth, fracBits)) // Output wire for the normalized vector.
     when(scale.value > 0.U) {
-      res.x := this.x / scale
-      res.y := this.y / scale
-      res.z := this.z / scale
+      res.x := this.x * scale
+      res.y := this.y * scale
+      res.z := this.z * scale
     }.otherwise {
       res := this
     }

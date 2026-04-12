@@ -5,3 +5,14 @@ project/target/
 project/project/
 test_run_dir/
 generated/
+output/
+.sbt/
+.sbt-boot/
+.sbtglobal/
+.sbt-global/
+.sbtboot/
+AppData/
+.coursier/
+src/main/scala/Uart.scala
+src/main/scala/UartTop.scala
+src/test/scala/UartTest.scala

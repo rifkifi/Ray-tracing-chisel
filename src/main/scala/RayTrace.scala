@@ -25,23 +25,30 @@ class Light(val bitWidth: Int = 32, val fracBits: Int = 16) extends Bundle { // 
 // ASCII Ray Tracer Main Module
 //=============================================================================
 class AsciiRayTracer(
-    val width: Int = 80, // Output frame width in characters.
-    val height: Int = 40, // Output frame height in characters.
     val maxSpheres: Int = 8, // Maximum number of spheres available through the sphere port.
-    val maxLights: Int = 4, // Maximum number of lights available through the light port.
-    val bitWidth: Int = 16 // Total fixed-point bit width used internally.
+    val maxLights: Int = 4 // Maximum number of lights available through the light port.
 ) extends Module { // Main hardware ASCII ray tracer module.
   
-  val FP_WIDTH = bitWidth // Total width of fixed-point values.
-  val FP_FRAC = bitWidth / 2 // Number of fractional bits in fixed-point values.
+  val WIDTH = 80 // Output frame width in characters.
+  val HEIGHT = 40 // Output frame height in characters.
+  val BIT_WIDTH = 16 // Total fixed-point bit width used internally.
+  val FP_WIDTH = 16 // Total width of fixed-point values.
+  val FP_FRAC = 8 // Number of fractional bits in fixed-point values.
+  val WIDTH_FIXED = Fixed.fromDouble(WIDTH.toDouble, FP_WIDTH, FP_FRAC) // Fixed-point frame width.
+  val INV_WIDTH = Fixed.fromDouble(0.0125, FP_WIDTH, FP_FRAC) // Fixed-point reciprocal of the frame width.
+  val INV_HEIGHT = Fixed.fromDouble(0.025, FP_WIDTH, FP_FRAC) // Fixed-point reciprocal of the frame height.
   val sphereAddrWidth = math.max(1, log2Ceil(maxSpheres)) // Address width for sphere indexing.
   val lightAddrWidth = math.max(1, log2Ceil(maxLights)) // Address width for light indexing.
+  val CAMERA_POS = Fixed.fromDouble(0.0, FP_WIDTH, FP_FRAC) // Fixed camera X/Y position.
+  val CAMERA_POS_Z = Fixed.fromDouble(2.0, FP_WIDTH, FP_FRAC) // Fixed camera Z position.
+  val CAMERA_DIR_Z = Fixed.fromDouble(-1.0, FP_WIDTH, FP_FRAC) // Fixed forward-facing camera direction.
+  val SCREEN_WIDTH = Fixed.fromDouble(1.3963, FP_WIDTH, FP_FRAC)
+  val SCREEN_HEIGHT = Fixed.fromDouble(0.6981, FP_WIDTH, FP_FRAC)
+
   
+  val piScaled = Fixed.rawBits(math.Pi, FP_WIDTH, FP_FRAC).U(FP_WIDTH.W) // Pi constant encoded in fixed-point raw bits.
+
   val io = IO(new Bundle { // External module interface.
-    val cameraPos = Input(new Vector3(FP_WIDTH, FP_FRAC)) // Camera position input.
-    val cameraDir = Input(new Vector3(FP_WIDTH, FP_FRAC)) // Camera forward direction input.
-    val fov = Input(UInt(FP_WIDTH.W)) // Field-of-view input in degrees.
-    
     val sphereAddr = Output(UInt(sphereAddrWidth.W)) // Address used to fetch the current sphere.
     val sphereData = Input(new Sphere(FP_WIDTH, FP_FRAC)) // Sphere data returned for the selected address.
     val lightAddr = Output(UInt(lightAddrWidth.W)) // Address used to fetch the current light.
@@ -53,8 +60,8 @@ class AsciiRayTracer(
     
     val asciiChar = Output(UInt(8.W)) // ASCII code for the current output pixel.
     val asciiValid = Output(Bool()) // Valid signal for the ASCII output.
-    val x = Output(UInt(log2Ceil(width).W)) // X coordinate of the current emitted pixel.
-    val y = Output(UInt(log2Ceil(height).W)) // Y coordinate of the current emitted pixel.
+    val x = Output(UInt(log2Ceil(WIDTH).W)) // X coordinate of the current emitted pixel.
+    val y = Output(UInt(log2Ceil(HEIGHT).W)) // Y coordinate of the current emitted pixel.
   })
   
   val ZERO = Fixed.zero(FP_WIDTH, FP_FRAC) // Fixed-point zero constant.
@@ -73,8 +80,8 @@ class AsciiRayTracer(
   }
   val state = RegInit(State.idle) // Current FSM state.
   
-  val pixelX = RegInit(0.U(log2Ceil(width).W)) // Current pixel X position.
-  val pixelY = RegInit(0.U(log2Ceil(height).W)) // Current pixel Y position.
+  val pixelX = RegInit(0.U(log2Ceil(WIDTH).W)) // Current pixel X position.
+  val pixelY = RegInit(0.U(log2Ceil(HEIGHT).W)) // Current pixel Y position.
   
   val currentRay = RegInit(0.U.asTypeOf(new Ray(FP_WIDTH, FP_FRAC))) // Primary ray for the current pixel.
   val shadowRay = RegInit(0.U.asTypeOf(new Ray(FP_WIDTH, FP_FRAC))) // Shadow ray toward the active light.
@@ -85,8 +92,8 @@ class AsciiRayTracer(
   val cameraForward = RegInit(0.U.asTypeOf(new Vector3(FP_WIDTH, FP_FRAC))) // Normalized camera forward axis.
   val cameraRight = RegInit(0.U.asTypeOf(new Vector3(FP_WIDTH, FP_FRAC))) // Normalized camera right axis.
   val cameraUp = RegInit(0.U.asTypeOf(new Vector3(FP_WIDTH, FP_FRAC))) // Normalized camera up axis.
-  val screenWidth = RegInit(Fixed.zero(FP_WIDTH, FP_FRAC)) // Half-screen width in camera space.
-  val screenHeight = RegInit(Fixed.zero(FP_WIDTH, FP_FRAC)) // Half-screen height in camera space.
+  // val screenWidth = RegInit(Fixed.zero(FP_WIDTH, FP_FRAC)) // Half-screen width in camera space.
+  // val screenHeight = RegInit(Fixed.zero(FP_WIDTH, FP_FRAC)) // Half-screen height in camera space.
   
   val sphereIdx = RegInit(0.U(sphereAddrWidth.W)) // Index of the sphere being tested for primary intersection.
   val shadowSphereIdx = RegInit(0.U(sphereAddrWidth.W)) // Index of the sphere being tested for shadow intersection.
@@ -125,8 +132,9 @@ class AsciiRayTracer(
     
     when(discPositive) {
       val sqrtDisc = discriminant >> 1 // Approximate square root term used for root solving.
-      val t1 = (-b - sqrtDisc) / (TWO * a) // Near intersection candidate.
-      val t2 = (-b + sqrtDisc) / (TWO * a) // Far intersection candidate.
+      val denom = Fixed.one(FP_WIDTH, FP_FRAC) / (TWO * a) // Denominator used for root solving.
+      val t1 = (-b - sqrtDisc) * denom // Near intersection candidate.
+      val t2 = (-b + sqrtDisc) * denom // Far intersection candidate.
       
       when(t1 > minT && t1 < maxT) {
         hit := true.B
@@ -187,21 +195,18 @@ class AsciiRayTracer(
       upWorld.y := ONE
       upWorld.z := ZERO
       
-      val forward = io.cameraDir.normalize() // Normalized camera forward axis.
+      val forward = Wire(new Vector3(FP_WIDTH, FP_FRAC)) // Fixed camera forward axis.
+      forward.x := ZERO
+      forward.y := ZERO
+      forward.z := CAMERA_DIR_Z
       val right = cross(upWorld, forward).normalize() // Normalized camera right axis.
       val up = cross(forward, right).normalize() // Normalized camera up axis.
       
       cameraForward := forward
       cameraRight := right
       cameraUp := up
-      
-      val fovRad = Wire(new Fixed(FP_WIDTH, FP_FRAC)) // Fixed-point field-of-view in radians.
-      val piScaled = Fixed.rawBits(math.Pi, FP_WIDTH, FP_FRAC).U(FP_WIDTH.W) // Pi constant encoded in fixed-point raw bits.
-      fovRad.value := ((io.fov * piScaled) / 180.U)(FP_WIDTH - 1, 0)
-      
-      val halfWidth = fovRad >> 1 // Half-angle used for the projection plane size.
-      screenWidth := halfWidth * Fixed.fromDouble(width.toDouble / height.toDouble, FP_WIDTH, FP_FRAC)
-      screenHeight := halfWidth
+      // screenWidth := SCREEN_WIDTH
+      // screenHeight := SCREEN_HEIGHT
       pixelX := 0.U
       pixelY := 0.U
       state := State.generateRay
@@ -211,18 +216,24 @@ class AsciiRayTracer(
     is(State.generateRay) {
       val u = Wire(new Fixed(FP_WIDTH, FP_FRAC)) // Normalized horizontal pixel coordinate.
       val v = Wire(new Fixed(FP_WIDTH, FP_FRAC)) // Normalized vertical pixel coordinate.
+      val pixelXFixed = Wire(new Fixed(FP_WIDTH, FP_FRAC)) // Current pixel X encoded as fixed-point.
+      val pixelYFixed = Wire(new Fixed(FP_WIDTH, FP_FRAC)) // Current pixel Y encoded as fixed-point.
       
-      u.value := (pixelX << FP_FRAC) / width.U
-      v.value := (pixelY << FP_FRAC) / height.U
+      pixelXFixed.value := pixelX << FP_FRAC
+      pixelYFixed.value := pixelY << FP_FRAC
+      u := pixelXFixed * INV_WIDTH
+      v := pixelYFixed * INV_HEIGHT
       
       val uCentered = u - Fixed.half(FP_WIDTH, FP_FRAC) // Horizontal coordinate shifted around the screen center.
       val vCentered = Fixed.half(FP_WIDTH, FP_FRAC) - v // Vertical coordinate shifted around the screen center.
-      val rightComp = cameraRight * (uCentered * screenWidth) // Horizontal ray contribution.
-      val upComp = cameraUp * (vCentered * screenHeight) // Vertical ray contribution.
+      val rightComp = cameraRight * (uCentered * SCREEN_WIDTH) // Horizontal ray contribution.
+      val upComp = cameraUp * (vCentered * SCREEN_HEIGHT) // Vertical ray contribution.
       val dir = cameraForward + rightComp + upComp // Unnormalized ray direction through the current pixel.
       val dirNorm = dir.normalize() // Normalized primary ray direction.
       
-      currentRay.origin := io.cameraPos
+      currentRay.origin.x := CAMERA_POS
+      currentRay.origin.y := CAMERA_POS
+      currentRay.origin.z := CAMERA_POS_Z
       currentRay.dir := dirNorm
       
       sphereIdx := 0.U
@@ -344,10 +355,10 @@ class AsciiRayTracer(
       io.x := pixelX
       io.y := pixelY
       
-      when(pixelX === (width - 1).U && pixelY === (height - 1).U) {
+      when(pixelX === (WIDTH - 1).U && pixelY === (HEIGHT - 1).U) {
         state := State.idle
         io.frameComplete := true.B
-      }.elsewhen(pixelX === (width - 1).U) {
+      }.elsewhen(pixelX === (WIDTH - 1).U) {
         pixelX := 0.U
         pixelY := pixelY + 1.U
         state := State.generateRay
@@ -366,7 +377,7 @@ object EmitAsciiRayTracer extends App { // Standalone generator entry point.
   println("Generating SystemVerilog for AsciiRayTracer...")
 
   emitVerilog(
-    new AsciiRayTracer(80, 40, 1, 1, 16),
+    new AsciiRayTracer(1, 1),
     Array(
       "--target-dir",
       "generated"
