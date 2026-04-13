@@ -1,5 +1,6 @@
 import chisel3._
 import chisel3.util._
+import chisel3.experimental.BundleLiterals._
 
 //=============================================================================
 // Ray Tracing Types
@@ -13,7 +14,6 @@ class Sphere(val bitWidth: Int = 32, val fracBits: Int = 16) extends Bundle { //
   val center = new Vector3(bitWidth, fracBits) // Sphere center position.
   val radius = new Fixed(bitWidth, fracBits) // Sphere radius.
   val radiusSq = new Fixed(bitWidth, fracBits) // Squared sphere radius for intersection math.
-  val specular = new Fixed(bitWidth, fracBits) // Specular reflection coefficient.
 }
 
 class Light(val bitWidth: Int = 32, val fracBits: Int = 16) extends Bundle { // Point light source definition.
@@ -25,33 +25,44 @@ class Light(val bitWidth: Int = 32, val fracBits: Int = 16) extends Bundle { // 
 // ASCII Ray Tracer Main Module
 //=============================================================================
 class AsciiRayTracer(
-    val maxSpheres: Int = 8, // Maximum number of spheres available through the sphere port.
-    val maxLights: Int = 4 // Maximum number of lights available through the light port.
+    val maxSpheres: Int = 8 // Maximum number of spheres available through the sphere port.
 ) extends Module { // Main hardware ASCII ray tracer module.
-  
   val WIDTH = 80 // Output frame width in characters.
   val HEIGHT = 40 // Output frame height in characters.
-  val BIT_WIDTH = 16 // Total fixed-point bit width used internally.
   val FP_WIDTH = 16 // Total width of fixed-point values.
   val FP_FRAC = 8 // Number of fractional bits in fixed-point values.
-  val WIDTH_FIXED = Fixed.fromDouble(WIDTH.toDouble, FP_WIDTH, FP_FRAC) // Fixed-point frame width.
   val INV_WIDTH = Fixed.fromDouble(0.0125, FP_WIDTH, FP_FRAC) // Fixed-point reciprocal of the frame width.
   val INV_HEIGHT = Fixed.fromDouble(0.025, FP_WIDTH, FP_FRAC) // Fixed-point reciprocal of the frame height.
-  val sphereAddrWidth = math.max(1, log2Ceil(maxSpheres)) // Address width for sphere indexing.
-  val lightAddrWidth = math.max(1, log2Ceil(maxLights)) // Address width for light indexing.
   val CAMERA_POS = Fixed.fromDouble(0.0, FP_WIDTH, FP_FRAC) // Fixed camera X/Y position.
   val CAMERA_POS_Z = Fixed.fromDouble(2.0, FP_WIDTH, FP_FRAC) // Fixed camera Z position.
   val CAMERA_DIR_Z = Fixed.fromDouble(-1.0, FP_WIDTH, FP_FRAC) // Fixed forward-facing camera direction.
   val SCREEN_WIDTH = Fixed.fromDouble(1.3963, FP_WIDTH, FP_FRAC)
   val SCREEN_HEIGHT = Fixed.fromDouble(0.6981, FP_WIDTH, FP_FRAC)
-
-  
-  val piScaled = Fixed.rawBits(math.Pi, FP_WIDTH, FP_FRAC).U(FP_WIDTH.W) // Pi constant encoded in fixed-point raw bits.
-
+  val ZERO = Fixed.zero(FP_WIDTH, FP_FRAC) // Fixed-point zero constant.
+  val ONE = Fixed.one(FP_WIDTH, FP_FRAC) // Fixed-point one constant.
+  val TWO = Fixed.fromDouble(2.0, FP_WIDTH, FP_FRAC) // Fixed-point two constant.
+  val AMBIENT = Fixed.fromDouble(0.1, FP_WIDTH, FP_FRAC) // Ambient light floor.
+  val EPSILON = Fixed.fromDouble(0.001, FP_WIDTH, FP_FRAC) // Small offset to avoid self-intersection.
+  val INFINITY_VAL = Fixed.fromDouble(999999.0, FP_WIDTH, FP_FRAC) // Large sentinel distance for nearest-hit search.
+  val FORWARD = (new Vector3(FP_WIDTH, FP_FRAC)).Lit( // Constant forward-facing camera vector.
+    _.x -> ZERO,
+    _.y -> ZERO,
+    _.z -> CAMERA_DIR_Z
+  )
+  val CAMERA_RIGHT = (new Vector3(FP_WIDTH, FP_FRAC)).Lit( // Constant camera right axis.
+    _.x -> Fixed.fromDouble(-1.0, FP_WIDTH, FP_FRAC),
+    _.y -> ZERO,
+    _.z -> ZERO
+  )
+  val CAMERA_UP = (new Vector3(FP_WIDTH, FP_FRAC)).Lit( // Constant camera up axis.
+    _.x -> ZERO,
+    _.y -> ONE,
+    _.z -> ZERO
+  )
+  val sphereAddrWidth = math.max(1, log2Ceil(maxSpheres)) // Address width for sphere indexing.
   val io = IO(new Bundle { // External module interface.
     val sphereAddr = Output(UInt(sphereAddrWidth.W)) // Address used to fetch the current sphere.
     val sphereData = Input(new Sphere(FP_WIDTH, FP_FRAC)) // Sphere data returned for the selected address.
-    val lightAddr = Output(UInt(lightAddrWidth.W)) // Address used to fetch the current light.
     val lightData = Input(new Light(FP_WIDTH, FP_FRAC)) // Light data returned for the selected address.
     
     val start = Input(Bool()) // Starts rendering a new frame.
@@ -64,19 +75,12 @@ class AsciiRayTracer(
     val y = Output(UInt(log2Ceil(HEIGHT).W)) // Y coordinate of the current emitted pixel.
   })
   
-  val ZERO = Fixed.zero(FP_WIDTH, FP_FRAC) // Fixed-point zero constant.
-  val ONE = Fixed.one(FP_WIDTH, FP_FRAC) // Fixed-point one constant.
-  val TWO = Fixed.fromDouble(2.0, FP_WIDTH, FP_FRAC) // Fixed-point two constant.
-  val AMBIENT = Fixed.fromDouble(0.1, FP_WIDTH, FP_FRAC) // Ambient light floor.
-  val EPSILON = Fixed.fromDouble(0.001, FP_WIDTH, FP_FRAC) // Small offset to avoid self-intersection.
-  val INFINITY_VAL = Fixed.fromDouble(999999.0, FP_WIDTH, FP_FRAC) // Large sentinel distance for nearest-hit search.
-  
   val ASCII_CHARS = VecInit(Seq( // ASCII ramp used to map intensity to characters.
     ' '.U, '.'.U, ','.U, ':'.U, ';'.U, 'o'.U, 'x'.U, '%'.U, '#'.U, '@'.U
   ))
   
   object State extends ChiselEnum { // Finite-state machine states for the renderer.
-    val idle, initCamera, generateRay, intersect, lighting, shadowIntersect, shade, output = Value // Ordered rendering pipeline states.
+    val idle, generateRay, normRayDir, intersectPrep, intersectSolve, intersectEval, intersectPost, shadowSetup, shadowPrep, shadowSolve, shadowEval, shade, output = Value // Ordered rendering pipeline states.
   }
   val state = RegInit(State.idle) // Current FSM state.
   
@@ -89,20 +93,12 @@ class AsciiRayTracer(
   val currentIntensity = RegInit(Fixed.zero(FP_WIDTH, FP_FRAC)) // Final intensity selected for ASCII output.
   val totalIntensity = RegInit(Fixed.zero(FP_WIDTH, FP_FRAC)) // Accumulated lighting intensity for the hit point.
   
-  val cameraForward = RegInit(0.U.asTypeOf(new Vector3(FP_WIDTH, FP_FRAC))) // Normalized camera forward axis.
-  val cameraRight = RegInit(0.U.asTypeOf(new Vector3(FP_WIDTH, FP_FRAC))) // Normalized camera right axis.
-  val cameraUp = RegInit(0.U.asTypeOf(new Vector3(FP_WIDTH, FP_FRAC))) // Normalized camera up axis.
-  // val screenWidth = RegInit(Fixed.zero(FP_WIDTH, FP_FRAC)) // Half-screen width in camera space.
-  // val screenHeight = RegInit(Fixed.zero(FP_WIDTH, FP_FRAC)) // Half-screen height in camera space.
-  
   val sphereIdx = RegInit(0.U(sphereAddrWidth.W)) // Index of the sphere being tested for primary intersection.
   val shadowSphereIdx = RegInit(0.U(sphereAddrWidth.W)) // Index of the sphere being tested for shadow intersection.
-  val lightIdx = RegInit(0.U(lightAddrWidth.W)) // Index of the light currently being processed.
   
   val closestT = RegInit(INFINITY_VAL) // Distance to the closest sphere hit found so far.
   val closestObj = RegInit(0.U(8.W)) // Index of the closest intersected sphere.
   val closestCenter = RegInit(0.U.asTypeOf(new Vector3(FP_WIDTH, FP_FRAC))) // Center of the closest intersected sphere.
-  val closestSpecular = RegInit(Fixed.zero(FP_WIDTH, FP_FRAC)) // Specular coefficient of the closest intersected sphere.
   val allTested = RegInit(false.B) // True when all spheres have been checked for the current ray.
   val inShadow = RegInit(false.B) // True when the active light is blocked.
   
@@ -110,12 +106,31 @@ class AsciiRayTracer(
   val hitNormal = RegInit(0.U.asTypeOf(new Vector3(FP_WIDTH, FP_FRAC))) // Surface normal at the hit point.
   val activeLightDir = RegInit(0.U.asTypeOf(new Vector3(FP_WIDTH, FP_FRAC))) // Direction from the hit point to the active light.
   val activeLightDistance = RegInit(Fixed.zero(FP_WIDTH, FP_FRAC)) // Max-norm distance from the hit point to the active light.
-  
-  def cross(a: Vector3, b: Vector3): Vector3 = { // Computes the vector cross product.
-    val res = Wire(new Vector3(FP_WIDTH, FP_FRAC)) // Output wire for the cross-product result.
-    res.x := (a.y * b.z) - (a.z * b.y)
-    res.y := (a.z * b.x) - (a.x * b.z)
-    res.z := (a.x * b.y) - (a.y * b.x)
+
+  // Shared intersection pipeline registers for primary and shadow tests.
+  val testA = RegInit(Fixed.zero(FP_WIDTH, FP_FRAC))
+  val testB = RegInit(Fixed.zero(FP_WIDTH, FP_FRAC))
+  val testDiscriminant = RegInit(Fixed.zero(FP_WIDTH, FP_FRAC))
+  val testT = RegInit(Fixed.zero(FP_WIDTH, FP_FRAC))
+  val testHit = RegInit(false.B)
+
+  // Two normalization pipelines:
+  // pair-1 is reused for primary ray dir and hit normal, pair-2 for light dir.
+  val pipeNormVec1 = RegInit(0.U.asTypeOf(new Vector3(FP_WIDTH, FP_FRAC)))
+  val pipeNormMag1 = RegInit(Fixed.zero(FP_WIDTH, FP_FRAC))
+  val pipeNormVec2 = RegInit(0.U.asTypeOf(new Vector3(FP_WIDTH, FP_FRAC)))
+  val pipeNormMag2 = RegInit(Fixed.zero(FP_WIDTH, FP_FRAC))
+
+  def normStage1(v: Vector3): Fixed = v.maxNorm() // Stage-1: magnitude estimate only.
+
+  def normStage2(vec: Vector3, mag: Fixed): Vector3 = { // Stage-2: reciprocal and rescale.
+    val res = Wire(new Vector3(FP_WIDTH, FP_FRAC))
+    when(mag.value > 0.U) {
+      val invMag = Fixed.one(FP_WIDTH, FP_FRAC) / mag
+      res := vec * invMag
+    }.otherwise {
+      res := vec
+    }
     res
   }
   
@@ -131,17 +146,12 @@ class AsciiRayTracer(
     val discPositive = discriminant.value.asSInt > 0.S // True when the quadratic has real roots.
     
     when(discPositive) {
-      val sqrtDisc = discriminant >> 1 // Approximate square root term used for root solving.
-      val denom = Fixed.one(FP_WIDTH, FP_FRAC) / (TWO * a) // Denominator used for root solving.
-      val t1 = (-b - sqrtDisc) * denom // Near intersection candidate.
-      val t2 = (-b + sqrtDisc) * denom // Far intersection candidate.
+      val sqrtDisc = discriminant >> 1 // Approximate square root term used for root solving. 
+      val t1 = (-b - sqrtDisc) / (TWO * a) // Near intersection candidate.
       
       when(t1 > minT && t1 < maxT) {
         hit := true.B
         t := t1
-      }.elsewhen(t2 > minT && t2 < maxT) {
-        hit := true.B
-        t := t2
       }.otherwise {
         hit := false.B
         t := ZERO
@@ -154,28 +164,18 @@ class AsciiRayTracer(
     (hit, t)
   }
   
-  def reflect(lightDir: Vector3, normal: Vector3): Vector3 = { // Reflects a direction vector about a surface normal.
-    val scale = TWO * normal.dot(lightDir) // Projection scale used by the reflection formula.
-    ((normal * scale) - lightDir).normalize()
-  }
-  
   def maxFixed(a: Fixed, b: Fixed): Fixed = Mux(a > b, a, b) // Returns the larger of two fixed-point values.
   
   def minFixed(a: Fixed, b: Fixed): Fixed = Mux(a < b, a, b) // Returns the smaller of two fixed-point values.
   
-  def powFixed(base: Fixed, exponent: Int): Fixed = { // Raises a fixed-point value to an integer exponent.
-    var result = ONE // Running multiplication result.
-    for (_ <- 0 until exponent) {
-      result = result * base
-    }
-    result
-  }
-  
   io.busy := (state =/= State.idle)
   io.asciiValid := false.B
   io.frameComplete := false.B
-  io.sphereAddr := Mux(state === State.shadowIntersect, shadowSphereIdx, sphereIdx)
-  io.lightAddr := lightIdx
+  io.sphereAddr := Mux(
+    state === State.shadowPrep || state === State.shadowSolve || state === State.shadowEval,
+    shadowSphereIdx,
+    sphereIdx
+  )
   io.asciiChar := ASCII_CHARS(0)
   io.x := 0.U
   io.y := 0.U
@@ -184,32 +184,10 @@ class AsciiRayTracer(
     // Wait for a new frame request before starting any camera or pixel work.
     is(State.idle) {
       when(io.start) {
-        state := State.initCamera
-      }
-    }
-    
-    // Build the camera basis vectors and derive the screen dimensions from the FOV.
-    is(State.initCamera) {
-      val upWorld = Wire(new Vector3(FP_WIDTH, FP_FRAC)) // World up axis used to build the camera basis.
-      upWorld.x := ZERO
-      upWorld.y := ONE
-      upWorld.z := ZERO
-      
-      val forward = Wire(new Vector3(FP_WIDTH, FP_FRAC)) // Fixed camera forward axis.
-      forward.x := ZERO
-      forward.y := ZERO
-      forward.z := CAMERA_DIR_Z
-      val right = cross(upWorld, forward).normalize() // Normalized camera right axis.
-      val up = cross(forward, right).normalize() // Normalized camera up axis.
-      
-      cameraForward := forward
-      cameraRight := right
-      cameraUp := up
-      // screenWidth := SCREEN_WIDTH
-      // screenHeight := SCREEN_HEIGHT
-      pixelX := 0.U
-      pixelY := 0.U
+        pixelX := 0.U
+        pixelY := 0.U
       state := State.generateRay
+      }
     }
     
     // Convert the current pixel coordinate into a normalized viewing ray.
@@ -226,87 +204,141 @@ class AsciiRayTracer(
       
       val uCentered = u - Fixed.half(FP_WIDTH, FP_FRAC) // Horizontal coordinate shifted around the screen center.
       val vCentered = Fixed.half(FP_WIDTH, FP_FRAC) - v // Vertical coordinate shifted around the screen center.
-      val rightComp = cameraRight * (uCentered * SCREEN_WIDTH) // Horizontal ray contribution.
-      val upComp = cameraUp * (vCentered * SCREEN_HEIGHT) // Vertical ray contribution.
-      val dir = cameraForward + rightComp + upComp // Unnormalized ray direction through the current pixel.
-      val dirNorm = dir.normalize() // Normalized primary ray direction.
+      val rightComp = CAMERA_RIGHT * (uCentered * SCREEN_WIDTH) // Horizontal ray contribution.
+      val upComp = CAMERA_UP * (vCentered * SCREEN_HEIGHT) // Vertical ray contribution.
+      val dir = FORWARD + rightComp + upComp // Unnormalized ray direction through the current pixel.
       
       currentRay.origin.x := CAMERA_POS
       currentRay.origin.y := CAMERA_POS
       currentRay.origin.z := CAMERA_POS_Z
-      currentRay.dir := dirNorm
+      pipeNormVec1 := dir
+      pipeNormMag1 := normStage1(dir)
       
       sphereIdx := 0.U
       closestT := INFINITY_VAL
       closestObj := 0.U
       closestCenter := 0.U.asTypeOf(new Vector3(FP_WIDTH, FP_FRAC))
-      closestSpecular := ZERO
       allTested := false.B
       currentIntensity := ZERO
       
-      state := State.intersect
+      state := State.normRayDir
+    }
+
+    // Complete primary-ray normalization in its own cycle.
+    is(State.normRayDir) {
+      currentRay.dir := normStage2(pipeNormVec1, pipeNormMag1)
+      state := State.intersectPrep
     }
     
-    // Test the generated ray against every sphere and keep the closest hit.
-    is(State.intersect) {
+    // Primary-intersection stage 1: coefficients and discriminant.
+    is(State.intersectPrep) {
       when(!allTested) {
-        val sphere = io.sphereData // Sphere currently fetched from external storage.
-        val (hit, t) = intersectSphere(currentRay, sphere, ZERO, closestT) // Intersection result for the current sphere.
-        
-        when(hit && t.value < closestT.value && t.value > ZERO.value) {
-          // printf(p"Hit sphere ${sphereIdx} at t=${t}\n")
-          closestT := t
-          closestObj := sphereIdx
-          closestCenter := sphere.center
-          closestSpecular := sphere.specular
-        }
-        
-        when(sphereIdx === (maxSpheres - 1).U) {
-          allTested := true.B
-        }.otherwise {
-          sphereIdx := sphereIdx + 1.U
-        }
+        val sphere = io.sphereData
+        val oc = currentRay.origin - sphere.center
+        val a = currentRay.dir.dot(currentRay.dir)
+        val b = (oc.dot(currentRay.dir)) * TWO
+        val c = oc.dot(oc) - sphere.radiusSq
+
+        testA := a
+        testB := b
+        testDiscriminant := (b * b) - ((TWO * TWO) * a * c)
+        state := State.intersectSolve
       }.otherwise {
         when(closestT.value < INFINITY_VAL.value) {
           val nextHitPoint = currentRay.origin + (currentRay.dir * closestT) // Computed closest world-space hit position.
+          val lightVector = io.lightData.position - nextHitPoint // Vector from the hit point to the light.
           hitPoint := nextHitPoint
-          hitNormal := (nextHitPoint - closestCenter).normalize()
           totalIntensity := AMBIENT
-          lightIdx := 0.U
-          state := State.lighting
+          pipeNormVec1 := nextHitPoint - closestCenter
+          pipeNormMag1 := normStage1(nextHitPoint - closestCenter)
+          pipeNormVec2 := lightVector
+          pipeNormMag2 := normStage1(lightVector)
+          activeLightDistance := lightVector.maxNorm()
+          shadowSphereIdx := 0.U
+          inShadow := false.B
+          state := State.intersectPost
         }.otherwise {
           currentIntensity := ZERO
           state := State.output
         }
       }
     }
-    
-    // Step through each light source and prepare a shadow ray for visibility testing.
-    is(State.lighting) {
-      when(lightIdx < maxLights.U) {
-        val light = io.lightData // Light currently fetched from external storage.
-        val lightVector = light.position - hitPoint // Vector from the hit point to the light.
-        val lightDir = lightVector.normalize() // Direction from the hit point to the light.
-        
-        shadowRay.origin := hitPoint + (hitNormal * EPSILON)
-        shadowRay.dir := lightDir
-        activeLightDir := lightDir
-        activeLightDistance := lightVector.maxNorm()
-        shadowSphereIdx := 0.U
-        inShadow := false.B
-        state := State.shadowIntersect
+
+    // Primary-intersection stage 2: solve candidate t.
+    is(State.intersectSolve) {
+      when(testDiscriminant.value.asSInt > 0.S) {
+        val sqrtDisc = testDiscriminant >> 1
+        testT := (-testB - sqrtDisc) / (TWO * testA)
+        testHit := true.B
       }.otherwise {
-        currentIntensity := minFixed(totalIntensity, ONE)
-        state := State.output
+        testT := ZERO
+        testHit := false.B
       }
+      state := State.intersectEval
+    }
+
+    // Primary-intersection stage 3: evaluate and advance sphere loop.
+    is(State.intersectEval) {
+      when(testHit && testT.value < closestT.value && testT.value > ZERO.value) {
+        closestT := testT
+        closestObj := sphereIdx
+        closestCenter := io.sphereData.center
+      }
+
+      when(sphereIdx === (maxSpheres - 1).U) {
+        allTested := true.B
+      }.otherwise {
+        sphereIdx := sphereIdx + 1.U
+      }
+      state := State.intersectPrep
+    }
+
+    // Complete hit-normal and light-direction normalization in parallel.
+    is(State.intersectPost) {
+      hitNormal := normStage2(pipeNormVec1, pipeNormMag1)
+      activeLightDir := normStage2(pipeNormVec2, pipeNormMag2)
+      state := State.shadowSetup
     }
     
-    // Check whether any sphere blocks the current light from reaching the hit point.
-    is(State.shadowIntersect) {
-      val sphere = io.sphereData // Sphere currently being tested against the shadow ray.
-      val (shadowHit, _) = intersectSphere(shadowRay, sphere, EPSILON, activeLightDistance) // Shadow-ray intersection result.
-      val blocksLight = (shadowSphereIdx =/= closestObj) && shadowHit // True when another sphere occludes the light.
-      
+    // Build the shadow ray after normalized inputs are registered.
+    is(State.shadowSetup) {
+      shadowRay.origin := hitPoint + (hitNormal * EPSILON)
+      shadowRay.dir := activeLightDir
+      state := State.shadowPrep
+    }
+    
+    // Shadow-intersection stage 1: coefficients and discriminant.
+    is(State.shadowPrep) {
+      val sphere = io.sphereData
+      val oc = shadowRay.origin - sphere.center
+      val a = shadowRay.dir.dot(shadowRay.dir)
+      val b = (oc.dot(shadowRay.dir)) * TWO
+      val c = oc.dot(oc) - sphere.radiusSq
+
+      testA := a
+      testB := b
+      testDiscriminant := (b * b) - ((TWO * TWO) * a * c)
+      state := State.shadowSolve
+    }
+
+    // Shadow-intersection stage 2: solve candidate t.
+    is(State.shadowSolve) {
+      when(testDiscriminant.value.asSInt > 0.S) {
+        val sqrtDisc = testDiscriminant >> 1
+        testT := (-testB - sqrtDisc) / (TWO * testA)
+        testHit := true.B
+      }.otherwise {
+        testT := ZERO
+        testHit := false.B
+      }
+      state := State.shadowEval
+    }
+
+    // Shadow-intersection stage 3: evaluate and advance shadow loop.
+    is(State.shadowEval) {
+      val blocksLight = (shadowSphereIdx =/= closestObj) &&
+        testHit && testT > EPSILON && testT < activeLightDistance
+
       when(blocksLight) {
         inShadow := true.B
         state := State.shade
@@ -314,6 +346,7 @@ class AsciiRayTracer(
         state := State.shade
       }.otherwise {
         shadowSphereIdx := shadowSphereIdx + 1.U
+        state := State.shadowPrep
       }
     }
     
@@ -325,19 +358,15 @@ class AsciiRayTracer(
         val diff = hitNormal.dot(activeLightDir) // Raw Lambertian dot product.
         val diffuse = maxFixed(diff, ZERO) // Clamped diffuse term.
         val diffuseContribution = light.intensity * diffuse // Diffuse lighting contribution.
-        
-        val viewDir = (currentRay.origin - hitPoint).normalize() // Direction from the hit point back to the camera.
-        val reflectDir = reflect(activeLightDir, hitNormal) // Reflected light direction about the surface normal.
-        val specBase = maxFixed(viewDir.dot(reflectDir), ZERO) // Clamped specular base term.
-        val specularPower = powFixed(specBase, 4) // Sharpened specular highlight term.
-        val specularContribution = light.intensity * specularPower * closestSpecular // Specular lighting contribution.
-        val nextIntensity = totalIntensity + diffuseContribution + specularContribution // Updated accumulated intensity.
+        val nextIntensity = totalIntensity + diffuseContribution // Updated accumulated intensity.
         
         totalIntensity := nextIntensity
+        currentIntensity := minFixed(nextIntensity, ONE)
+      }.otherwise {
+        currentIntensity := minFixed(totalIntensity, ONE)
       }
       
-      lightIdx := lightIdx + 1.U
-      state := State.lighting
+      state := State.output
     }
     
     // Map the final intensity to an ASCII character and advance to the next pixel.
@@ -377,7 +406,7 @@ object EmitAsciiRayTracer extends App { // Standalone generator entry point.
   println("Generating SystemVerilog for AsciiRayTracer...")
 
   emitVerilog(
-    new AsciiRayTracer(1, 1),
+    new AsciiRayTracer(1),
     Array(
       "--target-dir",
       "generated"
