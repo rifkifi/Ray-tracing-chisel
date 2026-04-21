@@ -1,0 +1,6 @@
+DESIGN_NAME: OrthoRayTracer
+VERILOG_FILES:
+  - generated/OrthoRayTracer.sv
+USE_SYNLIG: true
+CLOCK_PERIOD: 100
+CLOCK_PORT: clock

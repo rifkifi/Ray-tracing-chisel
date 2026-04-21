@@ -1,380 +1,345 @@
-  import chisel3._
-  import chiseltest._
-  import org.scalatest.flatspec.AnyFlatSpec
-  import java.io._
-  import scala.collection.mutable.ArrayBuffer
-  import scala.util.Random
+import chisel3._
+import chiseltest._
+import org.scalatest.flatspec.AnyFlatSpec
+import scala.collection.mutable.ArrayBuffer
 
-  case class SphereModel(cx: Double, cy: Double, cz: Double, radius: Double, specular: Double)
-  case class LightModel(px: Double, py: Double, pz: Double, intensity: Double)
+case class SphereInput(cx: Double, cy: Double, cz: Double, radius: Double)
+case class LightInput(px: Double, py: Double, pz: Double, intensity: Double)
 
-  object TestSceneDriver {
-    private def fixedBits(d: Double, bitWidth: Int, fracBits: Int): BigInt = {
-      val scaled = BigDecimal(d) * BigDecimal(1 << fracBits)
-      val raw = scaled.toBigInt
-      val min = -(BigInt(1) << (bitWidth - 1))
-      val max = (BigInt(1) << (bitWidth - 1)) - 1
-      val clamped = raw.max(min).min(max)
-      if (clamped < 0) clamped + (BigInt(1) << bitWidth) else clamped
-    }
+object RayTracerTestSupport {
+  private val FpWidth = 16
+  private val FpFrac = 8
+  private val AsciiChars = " .,:;ox%#@"
+  private val EmptySphere = SphereInput(0.0, 0.0, 0.0, 0.0)
+  val Width = 80
+  val Height = 40
 
-    def pokeFixed(port: UInt, value: Double): Unit = {
-      val bitWidth = port.getWidth
-      val fracBits = bitWidth / 2
-      port.poke(fixedBits(value, bitWidth, fracBits).U(bitWidth.W))
-    }
-
-    private def driveSphere(dut: AsciiRayTracer, sphere: SphereModel): Unit = {
-      pokeFixed(dut.io.sphereData.center.x.value, sphere.cx)
-      pokeFixed(dut.io.sphereData.center.y.value, sphere.cy)
-      pokeFixed(dut.io.sphereData.center.z.value, sphere.cz)
-      pokeFixed(dut.io.sphereData.radius.value, sphere.radius)
-      pokeFixed(dut.io.sphereData.radiusSq.value, sphere.radius * sphere.radius)
-    }
-
-    private def driveLight(dut: AsciiRayTracer, light: LightModel): Unit = {
-      pokeFixed(dut.io.lightData.position.x.value, light.px)
-      pokeFixed(dut.io.lightData.position.y.value, light.py)
-      pokeFixed(dut.io.lightData.position.z.value, light.pz)
-      pokeFixed(dut.io.lightData.intensity.value, light.intensity)
-    }
-
-    def drive(dut: AsciiRayTracer, spheres: Seq[SphereModel], lights: Seq[LightModel]): Unit = {
-      val sphere = spheres.lift(dut.io.sphereAddr.peek().litValue.toInt).getOrElse(SphereModel(0.0, 0.0, 0.0, 0.0, 0.0))
-      val light = lights.headOption.getOrElse(LightModel(0.0, 0.0, 0.0, 0.0))
-      // println(s"Driving sphere at address ${dut.io.sphereAddr.peek().litValue} with center=(${sphere.cx}, ${sphere.cy}, ${sphere.cz}), radius=${sphere.radius}")
-      driveSphere(dut, sphere)
-      driveLight(dut, light)
-    }
+  def configureClockTimeout(clock: Clock, width: Int, height: Int, maxSpheres: Int, frames: Int = 1): Unit = {
+    val cyclesPerPixel = (5 * maxSpheres) + 24
+    val timeoutCycles = math.max(1000, frames * (width * height * cyclesPerPixel + 256))
+    clock.setTimeout(timeoutCycles)
   }
 
-  object RayTracerTestSupport {
-    def configureClockTimeout(
-        dut: AsciiRayTracer,
-        width: Int,
-        height: Int,
-        maxSpheres: Int,
-        maxLights: Int,
-        frames: Int = 1
-    ): Unit = {
-      // Worst case per pixel includes:
-      // ray generation + sphere scan + hit finalize + per-light shadow/shade + output.
-      val cyclesPerPixel = maxSpheres + 4 + maxLights * (maxSpheres + 2)
-      val timeoutCycles = math.max(1000, frames * (width * height * cyclesPerPixel + 16))
-      dut.clock.setTimeout(timeoutCycles)
-    }
+  def fixedBits(value: Double): BigInt =
+    Fixed.rawBits(value, FpWidth, FpFrac)
+
+  def pokeSphere(target: Sphere, sphere: SphereInput): Unit = {
+    target.center.x.value.poke(fixedBits(sphere.cx).U(FpWidth.W))
+    target.center.y.value.poke(fixedBits(sphere.cy).U(FpWidth.W))
+    target.center.z.value.poke(fixedBits(sphere.cz).U(FpWidth.W))
+    target.radius.value.poke(fixedBits(sphere.radius).U(FpWidth.W))
+    target.radiusSq.value.poke(fixedBits(sphere.radius * sphere.radius).U(FpWidth.W))
   }
 
-  object SoftwareRayTracerModel {
-    final case class Vec3(x: Double, y: Double, z: Double) {
-      def +(that: Vec3): Vec3 = Vec3(x + that.x, y + that.y, z + that.z)
-      def -(that: Vec3): Vec3 = Vec3(x - that.x, y - that.y, z - that.z)
-      def *(scalar: Double): Vec3 = Vec3(x * scalar, y * scalar, z * scalar)
-      def dot(that: Vec3): Double = x * that.x + y * that.y + z * that.z
-      def lengthSq: Double = dot(this)
-      def maxNorm: Double = math.max(math.abs(x), math.max(math.abs(y), math.abs(z)))
-    }
+  def pokeLight(target: Light, light: LightInput): Unit = {
+    target.position.x.value.poke(fixedBits(light.px).U(FpWidth.W))
+    target.position.y.value.poke(fixedBits(light.py).U(FpWidth.W))
+    target.position.z.value.poke(fixedBits(light.pz).U(FpWidth.W))
+    target.intensity.value.poke(fixedBits(light.intensity).U(FpWidth.W))
+  }
 
-    private final case class Ray(origin: Vec3, dir: Vec3)
+  private def collectFrame(
+      clock: Clock,
+      asciiValid: Bool,
+      asciiChar: UInt,
+      y: UInt,
+      frameComplete: Bool
+  ): Seq[String] = {
+    var currentRow = new StringBuilder
+    var currentY = 0
+    val frameRows = ArrayBuffer.empty[String]
+    var done = false
 
-    private val Ambient = 0.1
-    private val Epsilon = 0.001
-    private val InfinityVal = 999999.0
-    private val AsciiChars = " .,:;ox%#@"
+    while (!done) {
+      clock.step()
 
-    private def normalize(v: Vec3): Vec3 = {
-      val scale = v.maxNorm
-      if (scale > 0.0) Vec3(v.x / scale, v.y / scale, v.z / scale) else v
-    }
+      if (asciiValid.peek().litToBoolean) {
+        val pixelY = y.peek().litValue.toInt
+        val pixelChar = asciiChar.peek().litValue.toInt.toChar
 
-    private def cross(a: Vec3, b: Vec3): Vec3 =
-      Vec3(
-        a.y * b.z - a.z * b.y,
-        a.z * b.x - a.x * b.z,
-        a.x * b.y - a.y * b.x
-      )
-
-    private def reflect(lightDir: Vec3, normal: Vec3): Vec3 = {
-      val scale = 2.0 * normal.dot(lightDir)
-      normalize((normal * scale) - lightDir)
-    }
-
-    private def powFixed(base: Double, exponent: Int): Double = {
-      var result = 1.0
-      for (_ <- 0 until exponent) {
-        result *= base
-      }
-      result
-    }
-
-    private def intersectSphere(ray: Ray, sphere: SphereModel, minT: Double = 0.0, maxT: Double = Double.PositiveInfinity): Option[Double] = {
-      val center = Vec3(sphere.cx, sphere.cy, sphere.cz)
-      val oc = ray.origin - center
-      val a = ray.dir.dot(ray.dir)
-      val b = oc.dot(ray.dir) * 2.0
-      val c = oc.dot(oc) - sphere.radius * sphere.radius
-      val discriminant = (b * b) - ((2.0 * 2.0) * a * c)
-
-      if (discriminant > 0.0) {
-        val sqrtDisc = discriminant / 2.0
-        val t1 = (-b - sqrtDisc) / (2.0 * a)
-        val t2 = (-b + sqrtDisc) / (2.0 * a)
-        if (minT < t1 && t1 < maxT) Some(t1)
-        else if (minT < t2 && t2 < maxT) Some(t2)
-        else None
-      } else {
-        None
-      }
-    }
-
-    def renderFrame(
-        width: Int,
-        height: Int,
-        spheres: Seq[SphereModel],
-        lights: Seq[LightModel],
-        cameraPos: Vec3,
-        cameraDir: Vec3,
-        fovDeg: Double
-    ): Seq[String] = {
-      val forward = normalize(cameraDir)
-      val right = normalize(cross(Vec3(0.0, 1.0, 0.0), forward))
-      val up = normalize(cross(forward, right))
-
-      val fovRad = (fovDeg * math.Pi) / 180.0
-      val halfWidth = fovRad / 2.0
-      val screenWidth = halfWidth * (width.toDouble / height.toDouble)
-      val screenHeight = halfWidth
-
-      (0 until height).map { y =>
-        val row = new StringBuilder
-        for (x <- 0 until width) {
-          val u = x.toDouble / width.toDouble
-          val v = y.toDouble / height.toDouble
-          val uCentered = u - 0.5
-          val vCentered = 0.5 - v
-          val rightComp = right * (uCentered * screenWidth)
-          val upComp = up * (vCentered * screenHeight)
-          val ray = Ray(cameraPos, normalize(forward + rightComp + upComp))
-
-          var closestT = InfinityVal
-          var closestObj = -1
-          var closestCenter = Vec3(0.0, 0.0, 0.0)
-          var closestSpecular = 0.0
-
-          for ((sphere, idx) <- spheres.zipWithIndex) {
-            intersectSphere(ray, sphere, 0.0, closestT).foreach { t =>
-              if (t < closestT && t > 0.0) {
-                closestT = t
-                closestObj = idx
-                closestCenter = Vec3(sphere.cx, sphere.cy, sphere.cz)
-                closestSpecular = sphere.specular
-              }
-            }
-          }
-
-          val currentIntensity =
-            if (closestT < InfinityVal) {
-              val hitPoint = ray.origin + (ray.dir * closestT)
-              val hitNormal = normalize(hitPoint - closestCenter)
-              var totalIntensity = Ambient
-
-              for (light <- lights) {
-                val lightPos = Vec3(light.px, light.py, light.pz)
-                val lightVector = lightPos - hitPoint
-                val lightDir = normalize(lightVector)
-                val shadowRay = Ray(hitPoint + (hitNormal * Epsilon), lightDir)
-                val lightDistance = lightVector.maxNorm
-
-                var inShadow = false
-                var shadowSphereIdx = 0
-                while (shadowSphereIdx < spheres.length && !inShadow) {
-                  val blocksLight =
-                    shadowSphereIdx != closestObj &&
-                      intersectSphere(shadowRay, spheres(shadowSphereIdx), Epsilon, lightDistance).nonEmpty
-                  if (blocksLight) {
-                    inShadow = true
-                  }
-                  shadowSphereIdx += 1
-                }
-
-                if (!inShadow) {
-                  val diff = hitNormal.dot(lightDir)
-                  val diffuse = math.max(diff, 0.0)
-                  val diffuseContribution = light.intensity * diffuse
-
-                  val viewDir = normalize(ray.origin - hitPoint)
-                  val reflectDir = reflect(lightDir, hitNormal)
-                  val specBase = math.max(viewDir.dot(reflectDir), 0.0)
-                  val specularPower = powFixed(specBase, 30)
-                  val specularContribution = light.intensity * specularPower * closestSpecular
-
-                  totalIntensity += diffuseContribution + specularContribution
-                }
-              }
-
-              math.min(totalIntensity, 1.0)
-            } else {
-              0.0
-            }
-
-          val charIndex = math.min((currentIntensity * (AsciiChars.length - 1)).toInt, AsciiChars.length - 1)
-          row.append(AsciiChars(charIndex))
+        if (pixelY != currentY) {
+          frameRows += currentRow.toString
+          currentRow.clear()
+          currentY = pixelY
         }
-        row.toString
+
+        currentRow.append(pixelChar)
       }
+
+      done = frameComplete.peek().litToBoolean
     }
+
+    frameRows += currentRow.toString
+    frameRows.toSeq
   }
 
-  object HardwareRayTracerTestSupport {
-    def renderHardwareFrame(
-        dut: AsciiRayTracer,
-        spheres: Seq[SphereModel],
-        lights: Seq[LightModel]
-    ): Seq[String] = {
-      TestSceneDriver.drive(dut, spheres, lights)
-      dut.io.start.poke(true.B)
+  def renderHardcodedFrame(dut: AsciiRayTracerHardcoded): Seq[String] = {
+    dut.io.start.poke(true.B)
+    dut.clock.step()
+    dut.io.start.poke(false.B)
+    collectFrame(dut.clock, dut.io.asciiValid, dut.io.asciiChar, dut.io.y, dut.io.frameComplete)
+  }
+
+  def renderCoreFrame(
+      dut: AsciiRayTracerCore,
+      spheres: Seq[SphereInput],
+      light: LightInput
+  ): Seq[String] = {
+    def driveScene(): Unit = {
+      val sphereIdx = dut.io.sphereAddr.peek().litValue.toInt
+      val sphere = spheres.lift(sphereIdx).getOrElse(EmptySphere)
+      pokeSphere(dut.io.sphereData, sphere)
+      pokeLight(dut.io.lightData, light)
+    }
+
+    driveScene()
+    dut.io.start.poke(true.B)
+    dut.clock.step()
+    dut.io.start.poke(false.B)
+
+    var currentRow = new StringBuilder
+    var currentY = 0
+    val frameRows = ArrayBuffer.empty[String]
+    var done = false
+
+    while (!done) {
+      driveScene()
       dut.clock.step()
-      dut.io.start.poke(false.B)
 
-      var currentRow = new StringBuilder
-      var currentY = 0
-      val frameRows = ArrayBuffer.empty[String]
+      if (dut.io.asciiValid.peek().litToBoolean) {
+        val pixelY = dut.io.y.peek().litValue.toInt
+        val pixelChar = dut.io.asciiChar.peek().litValue.toInt.toChar
 
-      while (!dut.io.frameComplete.peek().litToBoolean) {
-        TestSceneDriver.drive(dut, spheres, lights)
-        dut.clock.step()
+        if (pixelY != currentY) {
+          frameRows += currentRow.toString
+          currentRow.clear()
+          currentY = pixelY
+        }
 
-        if (dut.io.asciiValid.peek().litToBoolean) {
-          val y = dut.io.y.peek().litValue.toInt
-          val asciiChar = dut.io.asciiChar.peek().litValue.toInt.toChar
+        currentRow.append(pixelChar)
+      }
 
-          if (y != currentY) {
-            frameRows += currentRow.toString
-            currentRow.clear()
-            currentY = y
-          }
+      done = dut.io.frameComplete.peek().litToBoolean
+    }
 
-          currentRow.append(asciiChar)
+    frameRows += currentRow.toString
+    frameRows.toSeq
+  }
+
+  def renderCoreWindow(
+      dut: AsciiRayTracerCore,
+      spheres: Seq[SphereInput],
+      light: LightInput,
+      xStart: Int,
+      xEnd: Int,
+      yStart: Int,
+      yEnd: Int
+  ): Seq[String] = {
+    def driveScene(): Unit = {
+      val sphereIdx = dut.io.sphereAddr.peek().litValue.toInt
+      val sphere = spheres.lift(sphereIdx).getOrElse(EmptySphere)
+      pokeSphere(dut.io.sphereData, sphere)
+      pokeLight(dut.io.lightData, light)
+    }
+
+    val frame = Array.fill(yEnd - yStart + 1, xEnd - xStart + 1)(' ')
+    driveScene()
+    dut.io.start.poke(true.B)
+    dut.clock.step()
+    dut.io.start.poke(false.B)
+
+    var captureDone = false
+    var frameDone = false
+    while (!frameDone) {
+      driveScene()
+      dut.clock.step()
+
+      if (dut.io.asciiValid.peek().litToBoolean) {
+        val pixelX = dut.io.x.peek().litValue.toInt
+        val pixelY = dut.io.y.peek().litValue.toInt
+        val pixelChar = dut.io.asciiChar.peek().litValue.toInt.toChar
+
+        if (pixelX >= xStart && pixelX <= xEnd && pixelY >= yStart && pixelY <= yEnd) {
+          frame(pixelY - yStart)(pixelX - xStart) = pixelChar
+        }
+
+        if (!captureDone) {
+          captureDone = pixelY > yEnd || (pixelY == yEnd && pixelX >= xEnd)
         }
       }
 
-      frameRows += currentRow.toString
-      frameRows.toSeq
+      frameDone = dut.io.frameComplete.peek().litToBoolean
     }
+
+    frame.map(_.mkString).toSeq
   }
 
-  class AsciiRayTracerTest extends AnyFlatSpec with ChiselScalatestTester {
-    "AsciiRayTracer" should "render a simple frame" in {
-      test(new AsciiRayTracer(3)) { dut =>
-        RayTracerTestSupport.configureClockTimeout(dut, width = 80, height = 40, maxSpheres = 3, maxLights = 1)
-        print("\u001b[2J\u001b[H")  // Clear screen
-        println("=" * 80)
-        println("ASCII Ray Tracer - Hardware Simulation")
-        println("=" * 80)
-        println()
-        
-        val spheres = Seq(
-          SphereModel(0.0, -0.5, -1.0, 0.8, 1),
-          SphereModel(1.2, -0.2, -2.0, 0.6, 0.7),
-          SphereModel(-1.2, -0.1, -0.5, 0.5, 0.6),
-          // SphereModel(0.0, -100.5, -3.0, 100.0, 0.1)
-        )
-        val lights = Seq(
-          // LightModel(2.0, 2.0, -2.0, 0.7),
-          // LightModel(-2.0, 3.0, -3.0, 0.5),
-          LightModel(0.0, 5.0, 5, 0.5)
-        )
-        val frameRows = HardwareRayTracerTestSupport.renderHardwareFrame(dut, spheres, lights)
-        val totalPixels = frameRows.map(_.length).sum
+  def nonSpaceCount(frame: Seq[String]): Int =
+    frame.map(_.count(_ != ' ')).sum
 
-        frameRows.foreach(println)
-        println()
-        println("=" * 80)
-        println(s"Rendering Complete! Total pixels: $totalPixels")
-        println("=" * 80)
+  def brightnessScore(frame: Seq[String]): Int =
+    frame.iterator.flatMap(_.iterator).map(ch => AsciiChars.indexOf(ch).max(0)).sum
 
-        val filename = "output/hardware_raytrace2.txt"
-        val writer = new PrintWriter(new File(filename))
-        frameRows.foreach(writer.println)
-        writer.close()
-        println(s"Output saved to: $filename")
-      }
-    }
-  }
-
-  // Software simulation test (doesn't require hardware)
-  class SoftwareSimulationTest extends AnyFlatSpec {
-    
-    "Software simulation" should "generate ASCII art" in {
-      val width = 80
-      val height = 40
-      
-      println("=" * 80)
-      println("Software Simulation - ASCII Art Generation")
-      println("=" * 80)
-      println()
-      
-      val spheres = Seq(
-        SphereModel(0.0, -0.5, -1.0, 0.8, 1.0),
-        SphereModel(1.2, -0.2, -2.0, 0.6, 0.7),
-        SphereModel(-1.2, -0.1, -0.5, 0.5, 0.6)
-      )
-      val lights = Seq(
-        LightModel(0.0, 5.0, 5.0, 0.5)
-      )
-
-      val frameRows = SoftwareRayTracerModel.renderFrame(
-        width = width,
-        height = height,
-        spheres = spheres,
-        lights = lights,
-        cameraPos = SoftwareRayTracerModel.Vec3(0.0, 0.0, 2.0),
-        cameraDir = SoftwareRayTracerModel.Vec3(0.0, 0.0, -1.0),
-        fovDeg = 80.0
-      )
-
-      frameRows.foreach(println)
-      
-      println()
-      println("=" * 80)
-      
-      // Save to file
-      val filename = "output/software_raytrace.txt"
-      val writer = new PrintWriter(new File(filename))
-      frameRows.foreach(writer.println)
-      writer.close()
-      
-      println(s"Output saved to: $filename")
-    }
-  }
-
-  // Main test runner
-object RunAsciiRayTracerTests {
-  def main(args: Array[String]): Unit = {
-    def parseChoice(input: String): Option[Int] =
-      Option(input).map(_.trim).filter(_.nonEmpty).flatMap(value => scala.util.Try(value.toInt).toOption)
-
-    println("\n" + "=" * 80)
-    println("ASCII Ray Tracer Test Suite")
+  def printFrame(title: String, frame: Seq[String]): Unit = {
     println("=" * 80)
-    println()
-      
-      println("Select test to run:")
-      println("1. Software Simulation (Fast, no hardware)")
-    println("2. Hardware Simulation (Single Frame)")
-    
-    print("\nEnter choice (1-4): ")
-    val choice = args.headOption.flatMap(parseChoice).orElse(parseChoice(scala.io.StdIn.readLine())).getOrElse(4)
-    
-    choice match {
-      case 1 =>
-        println("\nRunning Software Simulation...\n")
-        (new SoftwareSimulationTest).execute()
-        case 2 =>
-          println("\nRunning Hardware Simulation...\n")
-          (new AsciiRayTracerTest).execute()
-        case _ =>
-          println("Invalid choice")
+    println(title)
+    println("=" * 80)
+    frame.foreach(println)
+    println("=" * 80)
+  }
+
+  def packedWord(low16: BigInt, high16: BigInt): BigInt =
+    (high16 << 16) | low16
+
+  def sphereWords(sphere: SphereInput): Seq[BigInt] = Seq(
+    packedWord(fixedBits(sphere.cx), fixedBits(sphere.cy)),
+    packedWord(fixedBits(sphere.cz), fixedBits(sphere.radius)),
+    fixedBits(sphere.radius * sphere.radius)
+  )
+
+  def lightWords(light: LightInput): Seq[BigInt] = Seq(
+    packedWord(fixedBits(light.px), fixedBits(light.py)),
+    packedWord(fixedBits(light.pz), fixedBits(light.intensity))
+  )
+
+  def writeMemWord(dut: AsciiRayTracerMem, addr: Int, data: BigInt): Unit = {
+    dut.io.memWriteEn.poke(true.B)
+    dut.io.memWriteMask.poke("b1111".U)
+    dut.io.memWriteAddr.poke(addr.U)
+    dut.io.memWriteData.poke(data.U(32.W))
+    dut.io.memReadAddr.poke(0.U)
+    dut.clock.step()
+    dut.io.memWriteEn.poke(false.B)
+    dut.clock.step()
+  }
+
+  def loadSceneIntoMem(dut: AsciiRayTracerMem, spheres: Seq[SphereInput], light: LightInput): Unit = {
+    spheres.zipWithIndex.foreach { case (sphere, idx) =>
+      sphereWords(sphere).zipWithIndex.foreach { case (word, wordIdx) =>
+        writeMemWord(dut, idx * 3 + wordIdx, word)
       }
     }
+    lightWords(light).zipWithIndex.foreach { case (word, wordIdx) =>
+      writeMemWord(dut, spheres.length * 3 + wordIdx, word)
+    }
   }
+
+  def renderMemFrame(dut: AsciiRayTracerMem): Seq[String] = {
+    dut.io.memWriteEn.poke(false.B)
+    dut.io.memWriteMask.poke(0.U)
+    dut.io.memWriteAddr.poke(0.U)
+    dut.io.memWriteData.poke(0.U)
+    dut.io.memReadAddr.poke(0.U)
+    dut.io.start.poke(true.B)
+    dut.clock.step()
+    dut.io.start.poke(false.B)
+    collectFrame(dut.clock, dut.io.asciiValid, dut.io.asciiChar, dut.io.y, dut.io.frameComplete)
+  }
+}
+
+class AsciiRayTracerHardcodedTest extends AnyFlatSpec with ChiselScalatestTester {
+  "AsciiRayTracerHardcoded" should "render a non-empty frame" in {
+    test(new AsciiRayTracerHardcoded(1)) { dut =>
+      RayTracerTestSupport.configureClockTimeout(dut.clock, width = 80, height = 40, maxSpheres = 3)
+
+      val frame = RayTracerTestSupport.renderHardcodedFrame(dut)
+      RayTracerTestSupport.printFrame("AsciiRayTracerHardcoded", frame)
+
+      assert(frame.length == 40)
+      assert(frame.forall(_.length == 80))
+      assert(RayTracerTestSupport.nonSpaceCount(frame) > 0)
+    }
+  }
+}
+
+class AsciiRayTracerSphereIoTest extends AnyFlatSpec with ChiselScalatestTester {
+  "AsciiRayTracerCore sphere IO" should "change the rendered frame when spheres are provided" in {
+    test(new AsciiRayTracerCore(1)) { dut =>
+      RayTracerTestSupport.configureClockTimeout(dut.clock, width = 80, height = 40, maxSpheres = 1, frames = 2)
+
+      val light = LightInput(0.0, 5.0, 5.0, 0.5)
+      val emptyFrame = RayTracerTestSupport.renderCoreWindow(
+        dut,
+        Seq(SphereInput(0.0, 0.0, 0.0, 0.0)),
+        light,
+        xStart = 12,
+        xEnd = 67,
+        yStart = 10,
+        yEnd = 30
+      )
+      val sphereFrame = RayTracerTestSupport.renderCoreWindow(
+        dut,
+        Seq(SphereInput(0.0, -0.2, -1.9, 0.7)),
+        light,
+        xStart = 12,
+        xEnd = 67,
+        yStart = 10,
+        yEnd = 30
+      )
+      RayTracerTestSupport.printFrame("AsciiRayTracerCore Sphere IO Empty Window", emptyFrame)
+      RayTracerTestSupport.printFrame("AsciiRayTracerCore Sphere IO Populated Window", sphereFrame)
+
+      assert(RayTracerTestSupport.nonSpaceCount(emptyFrame) == 0)
+      assert(RayTracerTestSupport.nonSpaceCount(sphereFrame) > 0)
+      assert(emptyFrame != sphereFrame)
+    }
+  }
+}
+
+class AsciiRayTracerLightIoTest extends AnyFlatSpec with ChiselScalatestTester {
+  "AsciiRayTracerCore light IO" should "change scene brightness when light intensity changes" in {
+    test(new AsciiRayTracerCore(1)) { dut =>
+      RayTracerTestSupport.configureClockTimeout(dut.clock, width = 80, height = 40, maxSpheres = 1, frames = 2)
+
+      val sphere = Seq(SphereInput(0.0, -0.2, -1.9, 0.7))
+      val darkLight = LightInput(0.0, 5.0, 5.0, 0.0)
+      val brightLight = LightInput(0.0, 5.0, 5.0, 0.5)
+
+      val darkFrame = RayTracerTestSupport.renderCoreWindow(
+        dut,
+        sphere,
+        darkLight,
+        xStart = 12,
+        xEnd = 67,
+        yStart = 10,
+        yEnd = 30
+      )
+      val brightFrame = RayTracerTestSupport.renderCoreWindow(
+        dut,
+        sphere,
+        brightLight,
+        xStart = 12,
+        xEnd = 67,
+        yStart = 10,
+        yEnd = 30
+      )
+      RayTracerTestSupport.printFrame("AsciiRayTracerCore Light IO Dark Window", darkFrame)
+      RayTracerTestSupport.printFrame("AsciiRayTracerCore Light IO Bright Window", brightFrame)
+
+      assert(RayTracerTestSupport.nonSpaceCount(brightFrame) > 0)
+      assert(RayTracerTestSupport.brightnessScore(brightFrame) > RayTracerTestSupport.brightnessScore(darkFrame))
+      assert(darkFrame != brightFrame)
+    }
+  }
+}
+
+class AsciiRayTracerMemTest extends AnyFlatSpec with ChiselScalatestTester {
+  "AsciiRayTracerMem" should "load sphere and light data from memory and render a non-empty frame" in {
+    test(new AsciiRayTracerMem(1, useMemModel = true)) { dut =>
+      RayTracerTestSupport.configureClockTimeout(dut.clock, width = 80, height = 40, maxSpheres = 1)
+
+      RayTracerTestSupport.loadSceneIntoMem(
+        dut,
+        spheres = Seq(SphereInput(0.0, -0.2, -1.9, 0.7)),
+        light = LightInput(0.0, 5.0, 5.0, 0.5)
+      )
+
+      val frame = RayTracerTestSupport.renderMemFrame(dut)
+      RayTracerTestSupport.printFrame("AsciiRayTracerMem", frame)
+
+      assert(frame.length == 40)
+      assert(frame.forall(_.length == 80))
+      assert(RayTracerTestSupport.nonSpaceCount(frame) > 0)
+    }
+  }
+}

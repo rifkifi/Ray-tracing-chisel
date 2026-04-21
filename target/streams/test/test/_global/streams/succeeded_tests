@@ -1,5 +1,15 @@
 #Successful Tests
-#Sun Apr 12 09:58:25 CEST 2026
-AsciiRayTracerTest=1775980705079
-SoftwareSimulationTest=1775643105145
-UartLoopbackTest=1775641976970
+#Tue Apr 21 19:10:51 CEST 2026
+AsciiRayCasterTest=1776449716633
+AsciiRayTracerHardcodedTest=1776789519716
+AsciiRayTracerMemTest=1776790653150
+AsciiRayTracerTest=1776784337431
+OrthoRayTracerHardcodedTest=1776786769437
+OrthoRayTracerLightIoTest=1776786868729
+OrthoRayTracerMemTest=1776786909230
+OrthoRayTracerSpec=1776700040049
+OrthoRayTracerSphereIoTest=1776786807900
+RayCasterAsciiTest=1776450552752
+SoftwareSimulationTest=1776243388651
+UartLoopbackTest=1776243388512
+VoxelDDAAsciiTest=1776451610340

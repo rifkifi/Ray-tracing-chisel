@@ -1,1 +1,1 @@
-["AsciiRayTracerTest","UartLoopbackTest","SoftwareSimulationTest"]
+["VoxelDDAAsciiTest","UartLoopbackTest","AsciiRayTracerMemTest","OrthoRayTracerMemTest","OrthoRayTracerLightIoTest","OrthoRayTracerSphereIoTest","AsciiRayTracerSphereIoTest","AsciiRayTracerHardcodedTest","OrthoRayTracerHardcodedTest","AsciiRayTracerLightIoTest"]

@@ -16,3 +16,5 @@ AppData/
 src/main/scala/Uart.scala
 src/main/scala/UartTop.scala
 src/test/scala/UartTest.scala
+runs/
+slpp_all/

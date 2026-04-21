@@ -2,6 +2,28 @@
 [0m[[0m[0mdebug[0m] [0m[0mForking tests - parallelism = false[0m
 [0m[[0m[0mdebug[0m] [0m[0mCreate a single-thread test executor[0m
 [0m[[0m[0mdebug[0m] [0m[0mRunner for org.scalatest.tools.Framework produced 1 initial tasks for 1 tests.[0m
-[0m[[0m[0mdebug[0m] [0m[0m  Running TaskDef(AsciiRayTracerTest, sbt.ForkMain$SubclassFingerscan@26f67b76, false, [SuiteSelector])[0m
-[0m[[0m[0minfo[0m] [0m[0m[32mAsciiRayTracerTest:[0m[0m
-[0m[[0m[0minfo[0m] [0m[0m[32mAsciiRayTracer[0m[0m
+[0m[[0m[0mdebug[0m] [0m[0m  Running TaskDef(AsciiRayTracerLightIoTest, sbt.ForkMain$SubclassFingerscan@26f67b76, false, [SuiteSelector])[0m
+[0m[[0m[0minfo[0m] [0m[0m[32mAsciiRayTracerLightIoTest:[0m[0m
+[0m[[0m[0minfo[0m] [0m[0m[32mAsciiRayTracerCore light IO[0m[0m
+[0m[[0m[0minfo[0m] [0m[0m[31m- should change scene brightness when light intensity changes *** FAILED ***[0m[0m
+[0m[[0m[0minfo[0m] [0m[0m[31m  chiseltest.TimeoutException: timeout on AsciiRayTracerCore.clock: IO[Clock] at 50600 idle cycles You can extend the timeout by calling .setTimeout(<n>) on your clock (setting it to 0 means 'no timeout').[0m[0m
+[0m[[0m[0minfo[0m] [0m[0m[31m  at chiseltest.internal.AccessCheck.simulationStep(AccessCheck.scala:174)[0m[0m
+[0m[[0m[0minfo[0m] [0m[0m[31m  at chiseltest.internal.SimController.$anonfun$scheduler$1(SimController.scala:59)[0m[0m
+[0m[[0m[0minfo[0m] [0m[0m[31m  at chiseltest.internal.Scheduler.doStep(Scheduler.scala:377)[0m[0m
+[0m[[0m[0minfo[0m] [0m[0m[31m  at chiseltest.internal.Scheduler.stepThread(Scheduler.scala:329)[0m[0m
+[0m[[0m[0minfo[0m] [0m[0m[31m  at chiseltest.internal.SimController.step(SimController.scala:103)[0m[0m
+[0m[[0m[0minfo[0m] [0m[0m[31m  at chiseltest.package$testableClock.step(package.scala:400)[0m[0m
+[0m[[0m[0minfo[0m] [0m[0m[31m  at RayTracerTestSupport$.renderCoreWindow(RayTracerTest.scala:155)[0m[0m
+[0m[[0m[0minfo[0m] [0m[0m[31m  at AsciiRayTracerLightIoTest.$anonfun$new$10(RayTracerTest.scala:314)[0m[0m
+[0m[[0m[0minfo[0m] [0m[0m[31m  at AsciiRayTracerLightIoTest.$anonfun$new$10$adapted(RayTracerTest.scala:291)[0m[0m
+[0m[[0m[0minfo[0m] [0m[0m[31m  at chiseltest.internal.SimController.run(SimController.scala:124)[0m[0m
+[0m[[0m[0minfo[0m] [0m[0m[31m  ...[0m[0m
+[0m[[0m[0mdebug[0m] [0m[0m    Produced 0 nested tasks and 1 events.[0m
+[0m[[0m[0minfo[0m] [0m[0m[36mRun completed in 4 minutes, 44 seconds.[0m[0m
+[0m[[0m[0minfo[0m] [0m[0m[36mTotal number of tests run: 1[0m[0m
+[0m[[0m[0minfo[0m] [0m[0m[36mSuites: completed 1, aborted 0[0m[0m
+[0m[[0m[0minfo[0m] [0m[0m[36mTests: succeeded 0, failed 1, canceled 0, ignored 0, pending 0[0m[0m
+[0m[[0m[0minfo[0m] [0m[0m[31m*** 1 TEST FAILED ***[0m[0m
+[0m[[0m[31merror[0m] [0m[0mFailed tests:[0m
+[0m[[0m[31merror[0m] [0m[0m	AsciiRayTracerLightIoTest[0m
+[0m[[0m[31merror[0m] [0m[0m(Test / [31mtestOnly[0m) sbt.TestsFailedException: Tests unsuccessful[0m

@@ -1,0 +1,6 @@
+DESIGN_NAME: AsciiRayTracerHardcoded
+VERILOG_FILES:
+  - generated/AsciiRayTracerHardcoded.sv
+USE_SYNLIG: true
+CLOCK_PERIOD: 100
+CLOCK_PORT: clock
