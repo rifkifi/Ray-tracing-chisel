@@ -49,46 +49,72 @@ class Vector3(val bitWidth: Int = 32, val fracBits: Int = 16) extends Bundle { /
   }
   
   def lengthSq: Fixed = dot(this) // Squared vector length.
+
+  def maxNorm(): Fixed = maxComponentAbs() // Largest absolute component magnitude.
+
+  def length(): Fixed = sqrt(lengthSq) // Euclidean vector length.
   
-  def normalize(): Vector3 = { // Returns a normalized version of the vector.
-    val len = sqrt(lengthSq) // Magnitude estimate used for normalization.
-    val res = Wire(new Vector3(bitWidth, fracBits)) // Output wire for the normalized vector.
-    when(len.value > 0.U) {
-      res.x := this.x / len
-      res.y := this.y / len
-      res.z := this.z / len
-    }.otherwise {
-      res := this
-    }
+def normalize(): Vector3 = {
+  val scale = maxNorm()
+  val res = Wire(new Vector3(bitWidth, fracBits))
+  when(scale.value > 0.U) {
+    res.x.value := (this.x.value.asSInt >> fracBits).asUInt
+    res.y.value := (this.y.value.asSInt >> fracBits).asUInt
+    res.z.value := (this.z.value.asSInt >> fracBits).asUInt
+  }.otherwise {
+    res := this
+  }
+  res
+}
+
+  private def absFixed(value: Fixed): Fixed = { // Returns the absolute value of a fixed-point number.
+    val res = Wire(new Fixed(bitWidth, fracBits))
+    res.value := Mux(value.value.asSInt < 0.S, (-value.value.asSInt).asUInt, value.value)
     res
   }
-  
-  private def sqrt(x: Fixed): Fixed = { // Approximates square root with Newton-Raphson iterations.
-    val result = Wire(new Fixed(bitWidth, fracBits)) // Output wire for the square-root estimate.
-    val iterations = 5 // Number of refinement iterations.
-    val guess = Wire(Vec(iterations + 1, new Fixed(bitWidth, fracBits))) // Iterative guesses for the square root.
-    
-    guess(0) := Fixed.zero(bitWidth, fracBits)
-    guess(0).value := x.value >> 1
-    
-    for (i <- 0 until iterations) {
-      val div = Wire(new Fixed(bitWidth, fracBits)) // Division term x / guess(i).
-      when(guess(i).value > 0.U) {
-        div.value := (x.value << fracBits) / guess(i).value
-      }.otherwise {
-        div.value := x.value
-      }
-      
-      val sum = Wire(new Fixed(bitWidth, fracBits)) // Sum used to average the current and reciprocal guesses.
-      sum.value := guess(i).value + div.value
-      
-      guess(i + 1) := Fixed.zero(bitWidth, fracBits)
-      guess(i + 1).value := sum.value >> 1
-    }
-    
-    result := guess(iterations)
-    result
+
+  private def maxFixed(a: Fixed, b: Fixed): Fixed = Mux(a > b, a, b) // Returns the larger of two fixed-point values.
+
+  private def maxComponentAbs(): Fixed = { // Returns the largest absolute component magnitude.
+    val absX = absFixed(this.x)
+    val absY = absFixed(this.y)
+    val absZ = absFixed(this.z)
+    maxFixed(absX, maxFixed(absY, absZ))
   }
+  
+ private def sqrt(x: Fixed): Fixed = {
+  val n = bitWidth  // 16
+  val result = Wire(new Fixed(bitWidth, fracBits))
+  
+  // We work with 2*bitWidth bits of precision internally
+  // rem = running remainder, root = partial root built up
+  val rem  = Wire(Vec(n/2 + 1, UInt((n+2).W)))
+  val root = Wire(Vec(n/2 + 1, UInt((n+2).W)))
+  
+  rem(0)  := x.value  // start with the input
+  root(0) := 0.U
+  
+  for (i <- 0 until n/2) {
+    // Bit position we're computing, from MSB down
+    val bitPos = (n/2 - 1 - i).U
+    
+    // Trial: Y = 2*root + 2^(2*bitPos) ... simplified for binary:
+    // candidate = root with this bit set, shifted appropriately
+    val candidate = (root(i) << 1) | (1.U << (bitPos * 2.U))
+    
+    // Does candidate fit in the remainder?
+    when(candidate <= rem(i)) {
+      rem(i+1)  := rem(i) - candidate
+      root(i+1) := root(i) | (1.U << bitPos)
+    }.otherwise {
+      rem(i+1)  := rem(i)
+      root(i+1) := root(i)
+    }
+  }
+  
+  result.value := root(n/2)(bitWidth-1, 0)
+  result
+}
   
   override def toPrintable: Printable = { // Provides a readable debug representation.
     p"Vector3(x=${x.value}, y=${y.value}, z=${z.value})"
